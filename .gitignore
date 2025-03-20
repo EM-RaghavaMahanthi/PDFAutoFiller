@@ -1,0 +1,30 @@
+venv/
+env/
+epdf/
+.venv/
+.pyenv/
+.vscode/
+.virtualenvs/
+pip-wheel-metadata/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.ipynb
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore logs and temporary files
+*.log
+*.out
+*.err
+*.swp
+*.swo
+.DS_Store
+
+# Ignore data folder
+
+data/
+models/
+logs/
