@@ -97,8 +97,15 @@ class FitzExtractorLine:
                             closest_line = (y0, y1)
 
                 if closest_line:
-                    lines[closest_line].append((f"[FIELD:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 9999))  
-                    assigned_gid = line_map[closest_line]   
+                    if assigned_table:
+                        field_tag = "TABLE_CELL_FIELD"
+                    elif field_type == "checkbox":
+                        field_tag = "CHECKBOX_FIELD"
+                    else:
+                        field_tag = "BLANK_FIELD"
+
+                    lines[closest_line].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 9999))  
+                    assigned_gid = line_map[closest_line] 
 
                 # **Store fid → gid mapping for metadata tracking**
                 self.fid_to_gid_map[fid] = assigned_gid  

@@ -1,5 +1,5 @@
 
-from models.bounding_box import BoundingBox
+from src.models.bounding_box import BoundingBox
 
 class BaseExtractor:
     def extract(self, pdf_path):
