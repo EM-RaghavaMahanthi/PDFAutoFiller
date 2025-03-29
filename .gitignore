@@ -28,5 +28,4 @@ __pycache__/
 config.yaml
 
 data/
-models/
 logs/
