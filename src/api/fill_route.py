@@ -18,7 +18,12 @@ def fill_pdf(request: FillRequest):
     return {
         "message": "PDF Filling Completed",
         "output_pdf": result["output_pdf"],
-        "filled_fields": result["filled_count"],
-        "total_fields": result["total_count"],
-        "fill_percentage": result["percentage"]
+        "total_form_fields": result["total_form_fields"],
+        "total_mapped_fields": result["total_fields"],
+        "fillable_fields": result["fillable_fields"],
+        "filled_fields": result["filled_fields"],
+        "missing_value_count": result["missing_value_count"],
+        "fill_percentage_mapped": result["percentage_filled"],
+        "fill_percentage_overall": result["overall_fill_percentage"],
+        "fillable_percentage_overall": result["overall_fillable_percentage"]
     }
