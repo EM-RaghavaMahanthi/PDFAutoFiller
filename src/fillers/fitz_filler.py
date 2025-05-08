@@ -1,12 +1,12 @@
 import os
 import json
 import shutil
-import fitz  # PyMuPDF
+import fitz 
 from src.utils.logger import logger
 
 class FitzFiller:
-    def __init__(self, rounding=1):
-        self.rounding = rounding
+    def __init__(self, fontsize=6):
+        self.fontsize = fontsize
 
     def load_data(self, extracted_path, mapping_path):
         """Load extracted data and final mappings."""
@@ -30,7 +30,7 @@ class FitzFiller:
             for field in page["form_fields"]:
                 fid = str(field["fid"])
                 bbox = field["bbox"]
-                field_type = field["type"]
+                field_type = field["field_type"]
                 fid_bbox_map[fid] = (bbox, field_type, page["page_number"] - 1)
         return fid_bbox_map
 
@@ -52,52 +52,50 @@ class FitzFiller:
         fillable_fields = 0
         filled_fields = 0
 
-        for page_key, mappings in final_mappings.items():
-            for fid, (key, value, confidence) in mappings.items():
-                if key is None:
-                    continue  # No semantic mapping, ignore
+        
+        for fid, (key, value, confidence) in final_mappings.items():
+            if key is None:
+                continue  # No semantic mapping, ignore
 
-                total_fields += 1
+            total_fields += 1
 
-                if value is None or value == "":
-                    continue  # Missing value
+            if value is None or value == "":
+                continue  # Missing value
 
-                bbox_info = fid_bbox_map.get(fid)
-                if not bbox_info:
-                    logger.warning(f"No bbox found for fid {fid}")
-                    continue
+            bbox_info = fid_bbox_map.get(fid)
+            if not bbox_info:
+                logger.warning(f"No bbox found for fid {fid}")
+                continue
 
-                bbox, field_type, page_num = bbox_info
+            bbox, field_type, page_num = bbox_info
 
-                # Only fill text fields (skip checkbox)
-                if field_type not in ["text_input"]:
-                    continue
+            # Only fill text fields (skip checkbox)
+            if field_type not in ["text"]:
+                continue
 
-                rect = fitz.Rect(bbox["left"], bbox["top"], bbox["right"], bbox["bottom"])
-                page = doc[page_num]
+            rect = fitz.Rect(bbox["left"], bbox["top"], bbox["right"], bbox["bottom"])
+            page = doc[page_num]
 
-                try:
-                    page.insert_textbox(rect, str(value), fontsize=9, color=(1, 0, 0))
-                    filled_fields += 1
-                    fillable_fields += 1
-                except Exception as e:
-                    logger.warning(f"Could not fill fid {fid}: {e}")
+            try:
+                page.insert_textbox(rect, str(value), fontsize=self.fontsize, color=(1, 0, 0))
+                filled_fields += 1
+                fillable_fields += 1
+            except Exception as e:
+                logger.warning(f"Could not fill fid {fid}: {e}")
 
         doc.saveIncr()
 
         missing_value_count = total_fields - fillable_fields
 
         fill_percent = round((filled_fields / total_fields) * 100, 2) if total_fields else 0
-        missing_percent = round((missing_value_count / total_fields) * 100, 2) if total_fields else 0
+        mapped_percentage = round((total_fields / total_form_fields) * 100, 2) if total_fields else 0
         overall_fill_percent = round((filled_fields / total_form_fields) * 100, 2) if total_form_fields else 0
-        overall_fillable_percent = round((fillable_fields / total_form_fields) * 100, 2) if total_form_fields else 0
 
         logger.info(f"Total Mapped Fields: {total_fields}")
         logger.info(f"Fields Successfully Filled: {filled_fields}")
         logger.info(f"Fill Percentage (w.r.t mapped fields): {fill_percent}%")
-        logger.info(f"Fields with Missing Values: {missing_value_count} ({missing_percent}%)")
+        logger.info(f"Percentage of fields mapped: {missing_value_count} ({mapped_percentage}%)")
         logger.info(f"Overall Fill Percentage (w.r.t total form fields): {overall_fill_percent}%")
-        logger.info(f"Overall Fillable Fields Percentage: {overall_fillable_percent}%")
         logger.info(f"Filled PDF saved at: {output_pdf_path}")
 
         return {
@@ -107,8 +105,7 @@ class FitzFiller:
             "filled_fields": filled_fields,
             "percentage_filled": fill_percent,
             "missing_value_count": missing_value_count,
-            "percentage_missing_value": missing_percent,
+            "mapped_percentage": mapped_percentage,
             "total_form_fields": total_form_fields,
-            "overall_fill_percentage": overall_fill_percent,
-            "overall_fillable_percentage": overall_fillable_percent
+            "overall_fill_percentage": overall_fill_percent
         }

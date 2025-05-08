@@ -6,126 +6,169 @@ from math import ceil
 from src.llm.llm_selector import ClaudeLLM
 from src.utils.logger import logger
 from src.utils.timing import timing_decorator
+import time
+from src.chunkers import get_chunker
 
 class SemanticMapper:
-    def __init__(self, llm: ClaudeLLM, chunk_size: int = 12):
+    def __init__(self, llm: ClaudeLLM, config: dict):
         self.llm = llm
-        self.chunk_size = chunk_size
-        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")  # Closest to Claude
+        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        self.config = config
 
+        strategy = config.get("name", "page")  
+        self.chunker = get_chunker(strategy, self.tokenizer, **config)
+        
     def prepare_updated_input_data(self, input_data):
-        """Keep checkbox values, blank others."""
-        updated = {}
-        for key, value in input_data.items():
-            if "check" in key.lower() or "checkbox" in key.lower():
-                updated[key] = value
-            else:
-                updated[key] = ""
-        return updated
+        """Only keep list of keys, ignore values."""
+        return list(input_data.keys())
 
-    def get_page_chunk_context(self, extracted_data, start_page, end_page):
-        """Concatenate text elements for given chunk."""
-        total_pages = len(extracted_data["pages"])
-        start_page = max(1, start_page)
-        end_page = min(total_pages, end_page)
-        combined_lines = []
-
-        for page in extracted_data["pages"][start_page - 1 : end_page]:
-            sorted_lines = page["text_elements"]
-            for line in sorted_lines:
-                combined_lines.append(line["text"])
-
-        combined_text = "\n".join(combined_lines)
-        token_count = len(self.tokenizer.encode(combined_text))
-
-        logger.info(f"Chunk Pages {start_page}-{end_page}: Tokens = {token_count}")
-        return combined_text
-
-    def generate_context_and_stats(self, extracted_data):
-        """Generate context per chunk."""
-        total_pages = len(extracted_data["pages"])
-        num_chunks = ceil(total_pages / self.chunk_size)
-        context_dict = {}
-        stats_dict = {}
-
-        for i in range(num_chunks):
-            start_page = i * self.chunk_size + 1
-            end_page = min((i + 1) * self.chunk_size, total_pages)
-            context = self.get_page_chunk_context(extracted_data, start_page, end_page)
-            key = f"Page {start_page}-{end_page}"
-            context_dict[key] = context
-            stats_dict[key] = (
-                len(context.split()),
-                sum(len(p["form_fields"]) for p in extracted_data["pages"][start_page - 1:end_page])
-            )
-        return context_dict, stats_dict
-
-    def prepare_prompt(self, context_text, input_data):
-        """Prepare LLM prompt."""
+    def prepare_prompt(self, context_text, input_keys, fid_start, fid_end):
         prompt = f"""
-You are assisting in filling fields in a PDF form.
+You are a highly reliable document assistant that must semantically fill fields in a PDF form using the provided field context and a list of known keys.
 
-**PDF Context:**
+You must follow all instructions very carefully. Do not infer values, do not hallucinate, and do not change the required structure under any circumstance.
+
+Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+
+---
+---
+
+PDF Context:
+Below is the extracted, line-by-line text from the PDF. It includes tagged form fields that require semantic interpretation.
+
+-----
+-----
 {context_text}
+-----
+-----
 
-**Input Data:**
-A flat dictionary of key-value pairs:
-{json.dumps(input_data, indent=2)}
+Each field tag is marked using one of the following formats:
+- [FIELD:{{fid}}]
+- [BLANK_FIELD:{{fid}}]
+- [TABLE_CELL_FIELD:{{fid}}]
+- [CHECKBOX_FIELD:{{fid}}]
 
-**Important Clarification:**
-- **Input data is a dictionary in `key: value` format.**
-- The `key` represents the semantic label.
-- The `value` is the actual value to fill if the key matches.
-- For most fields (BLANK_FIELD, TABLE_CELL_FIELD, FIELD), you should match based **only on the key name**.
-- **Do not match based on input value.**
-- Looks for DOBs or Data of births of Dtae of Birth. Inceptions dates are not date of births of person
+Each fid is a numeric field ID like 11, 12, 24, etc.
 
-**Checkbox Special Rule:**
-- For `CHECKBOX_FIELD`, you must match based on both key and value:
-    - If key matches and input value indicates Yes/True → `"matched_value": true`
-    - If key matches but value indicates No/False → `"matched_value": false`
-    - If unclear → `"matched_value": null`
+---
 
-**Instructions:**
-1. Detect all field IDs in the context in format `[FIELD:{{fid}}]`, `[BLANK_FIELD:{{fid}}]`, `[TABLE_CELL_FIELD:{{fid}}]`, `[CHECKBOX_FIELD:{{fid}}]`.
-2. For each field:
-    - For non-checkbox → match **only key name meaning**
-    - For checkbox → match **key name + input value**
-3. If confident:
-    - Return `"matched_key"`, `"matched_value"` (from input data), `"confidence"` (0 to 1, based only on key name match)
-4. If no clear match:
-    - `"matched_key": null`, `"matched_value": null`, `"confidence": 0`
+Input Keys:
+You are given a flat list of semantic keys:
+{json.dumps(input_keys, indent=2)}
 
-**Output Format:**
-Return only valid JSON:
+- These are the only allowed key labels.
+- Do not invent, reword, interpret, or create new labels.
+- Only return exact matches from this list in your output's "key" field.
+
+---
+
+---
+
+Fid start: {fid_start} and Fid end:{fid_end}
+
+Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+
+---
+
+
+Your Task:
+1. For each tagged field (e.g., [BLANK_FIELD:12]) found in the context, analyze the surrounding label to determine what it is asking for.
+1.1 Return only and exactly the fids (field IDs) present in the context. Do not add any fids that are not explicitly tagged in the context text, even if you think they are related
+2. Based on the semantic meaning of that field label, identify the best-matching key from the input list.
+3. Then, place that matched key (exact string) in the "key" field for that fid. Do not use the label itself.
+4. If no strong match exists, set "key": null and "con": 0.
+
+---
+
+Field ID Format:
+- The keys in your output JSON must be the raw integer fid values from the context.
+- For example, if the tag is [BLANK_FIELD:11], your JSON should have:
+  "11": {{ "key": ..., "con": ... }}
+- Never write "fid11" or similar. Use "11" as the string key.
+- Output key = field number only.
+
+Key Matching from Input Only:
+- You must identify what the field is asking for, then select the corresponding label from the input_keys list.
+- The "key" must be a value from the input list only.
+- Do not write inferred or paraphrased labels like "Amount of Investment" unless that exact string is in input_keys.
+- Always return the best matching input key from the list, or null if no clear match.
+
+---
+
+Semantic Matching:
+- Use only the line of text that contains the [FIELD:X] tag to understand its label.
+- Do not use unrelated or far-away lines.
+- Do not assume meaning. Only use what is clearly visible and relevant.
+
+Person vs. Entity Detection:
+- If the label includes terms like "person", "individual", "investor", "whose", or "applicant", it likely refers to a human.
+- If it includes "company", "organization", or "fund", it likely refers to an entity.
+- Use this judgment when mapping date fields or identity fields.
+
+Special Date Rule:
+- "Date of Birth" refers to a person's birth date only.
+- "Inception Date", "Formation Date", etc., refer to companies or entities only.
+- Never match a Date of Birth field to any key that contains "InceptionDate".
+- If unsure, return "key": null.
+
+Checkbox Handling:
+- If a label implies Yes/No (like "I confirm", "Is this correct?"), you may treat blanks as checkboxes.
+- Still, match only by the label’s semantic meaning to a valid key.
+
+---
+
+Confidence Score:
+You must provide a "con" value with the following rules:
+- 0.90 – 1.00 → Very strong and clear semantic match
+- 0.60 – 0.89 → Moderate certainty
+- 0.30 – 0.59 → Weak match
+- 0.00 – 0.29 → No match → set "key": null
+
+Do not assign high confidence unless the match is clear and unambiguous.
+
+---
+
+Expected Output Format:
+Return JSON structured exactly like this:
+
 {{
-  "fid1": {{
-    "matched_key": "input_key_name",
-    "matched_value": "input_value",
-    "confidence": 0.85
+  "11": {{
+    "key": "input_key_name",
+    "con": 0.92
   }},
-  "fid2": {{
-    "matched_key": null,
-    "matched_value": null,
-    "confidence": 0
+  "12": {{
+    "key": null,
+    "con": 0
   }},
-  "fid3": {{
-    "matched_key": "input_key_name",
-    "matched_value": true,
-    "confidence": 0.92
+  "24": {{
+    "key": "another_input_key",
+    "con": 0.88
   }}
 }}
-**Rules:**
-- Always include all fids detected in context.
-- No explanation, only valid JSON.
 
-Start now.
+Rules:
+- Field IDs (keys) must be numeric strings like "11", "12", etc.
+- Only return field IDs that appear in the provided context chunk not more not less( very strict)Return only and exactly the fids (field IDs) present in the context. Do not add any fids that are not explicitly tagged in the context text, even if you think they are related.
+- Do not return any extra or missing fids.
+- Do not include any other text, explanation, or comments. Only valid JSON.
+- Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+
+---
+
+Final Reminders:
+- Only use keys found in the input list
+- Output keys = numeric fids (e.g., "11"), not "fid11"
+- Confidence score must reflect real certainty
+- Return only fids tagged in the current context
+- Do not guess, hallucinate, reword, or over-infer
+- Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+Now begin and return only valid JSON.
 """
         return prompt
 
+
     @timing_decorator
     def process_and_save(self, pdf_path, input_json_path, output_dir="data/temp"):
-        """Main function: run mapping & save result."""
         os.makedirs(output_dir, exist_ok=True)
         pdf_name = os.path.basename(pdf_path).replace(".pdf", "")
         extracted_path = f"{output_dir}/extracted_{pdf_name}.json"
@@ -134,30 +177,34 @@ Start now.
 
         logger.info(f"Starting Field Mapping for PDF: {pdf_path}")
 
-        # Load data
         with open(extracted_path, "r", encoding="utf-8") as f:
             extracted_data = json.load(f)
         with open(input_json_path, "r", encoding="utf-8") as f:
             input_data = json.load(f)
 
-        m_input_data = self.prepare_updated_input_data(input_data)
-        context_dict, _ = self.generate_context_and_stats(extracted_data)
-
+        keys_only = self.prepare_updated_input_data(input_data)
+        context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
         final_output = {}
-        total_fillable = 0
+        final_flat_mapping = {}
 
-        with open(debug_path, "w") as dbg_f:
-            for i, (chunk_key, context_text) in enumerate(context_dict.items()):
+        with open(debug_path, "w", encoding="utf-8") as dbg_f:
+            for i, (chunk_key, chunk_info) in enumerate(context_dict.items()):
                 logger.info(f"[Chunk {i+1}] Processing {chunk_key}")
 
-                # -- Chunk timing --
-                import time
-                chunk_start = time.time()
+                context_text = chunk_info["context"]
+                start_fid = chunk_info["start_fid"]
+                end_fid = chunk_info["end_fid"]
 
-                prompt = self.prepare_prompt(context_text, m_input_data)
+                logger.info(f"start fid: {start_fid}\tend fid: {end_fid}")
+
+                if not context_text.strip() or start_fid<0:
+                    logger.warning(f"{chunk_key}: Skipping empty context or nor fields")
+                    continue
+
+                chunk_start = time.time()
+                prompt = self.prepare_prompt(context_text, keys_only, start_fid, end_fid)
                 input_tokens = len(self.tokenizer.encode(prompt))
 
-                # LLM call
                 response = self.llm.complete(prompt)
                 raw_response = response.text if hasattr(response, 'text') else response
                 output_tokens = len(self.tokenizer.encode(raw_response))
@@ -169,44 +216,25 @@ Start now.
                     "raw_response": raw_response
                 }) + "\n")
 
-                cleaned_dict = {}
                 try:
                     cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.strip(), flags=re.MULTILINE)
                     parsed = json.loads(cleaned_json)
 
-                    fillable_count = 0
                     for fid, info in parsed.items():
-                        key = info.get("matched_key")
-                        value = info.get("matched_value")
-                        confidence = info.get("confidence", 0)
-
-                        if key is not None and (value is None or value == ''):
-                            value = input_data.get(key)
-
-                        if value not in [None, ""]:
-                            fillable_count += 1
-
-                        cleaned_dict[fid] = (key, value, confidence)
-
-                    logger.info(f"{chunk_key}: Fields Detected = {len(parsed)}, Fillable Fields = {fillable_count}")
-                    total_fillable += fillable_count
+                        key = info.get("key")
+                        confidence = info.get("con", 0)
+                        value = input_data.get(key) if key in input_data else None
+                        final_flat_mapping[fid] = (key, value, confidence)
 
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse LLM JSON in chunk {chunk_key}. Check debug file.")
 
-                final_output[chunk_key] = cleaned_dict
+                logger.info(f"{chunk_key}: Chunk processed in {(time.time() - chunk_start):.2f} seconds.")
 
-                # -- Chunk timing end --
-                chunk_end = time.time()
-                logger.info(f"{chunk_key}: Chunk processed in {(chunk_end - chunk_start):.2f} seconds.")
-
-        # Save
-        with open(mapping_path, "w") as f:
-            json.dump(final_output, f, indent=2)
+        with open(mapping_path, "w", encoding="utf-8") as f:
+            json.dump(final_flat_mapping, f, indent=2)
 
         logger.info(f"Saved raw LLM responses to: {debug_path}")
-        logger.info(f"Saved cleaned field mappings to: {mapping_path}")
-        logger.info(f"Total Fillable Fields across all chunks: {total_fillable}")
+        logger.info(f"Saved cleaned (deduplicated) field mappings to: {mapping_path}")
 
         return mapping_path
-

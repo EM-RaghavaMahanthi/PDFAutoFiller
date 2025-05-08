@@ -7,7 +7,8 @@ from src.utils.logger import logger
 class FitzExtractorLine:
     """Extracts text, form fields, and tables from PDFs with sorted Global/Page IDs."""
 
-    def __init__(self, rounding=1):
+    def __init__(self, WIDGET_LINE_DISTANCE_THRESHOLD, rounding=1):
+        self.WIDGET_LINE_DISTANCE_THRESHOLD=WIDGET_LINE_DISTANCE_THRESHOLD
         self.global_id = 1
         self.global_fid = 1
         self.rounding = rounding
@@ -26,7 +27,7 @@ class FitzExtractorLine:
                 "form_fields": [],
                 "tables": [],
                 "table_cell_info": {}
-            }
+            }   
 
             elements = []
             words = page.get_text("words")
@@ -41,19 +42,20 @@ class FitzExtractorLine:
             for word in words:
                 x0, y0, x1, y1, text, *_ = word
                 line_key = (round(y0, self.rounding), round(y1, self.rounding))
-                if line_key not in line_map:
-                    line_map[line_key] = self.global_id
-                    self.global_id += 1
-                    lines[line_key] = []
                 if line_key not in lines:
                     lines[line_key] = []
-
                 if re.match(r"[._\u2026-]{2,}", text):
                     lines[line_key].append(("", (x0, y0, x1, y1), word[-1]))
                 else:
                     lines[line_key].append((text, (x0, y0, x1, y1), word[-1]))
 
-            # Step 2: Extract Tables
+            # Step 2: Assign GIDs in visual order (sorted by y0)
+            sorted_line_keys = sorted(lines.keys(), key=lambda k: k[0])
+            for line_key in sorted_line_keys:
+                line_map[line_key] = self.global_id
+                self.global_id += 1
+
+            # Step 3: Extract Tables
             tables = page.find_tables()
             table_data = []
             for tid, table in enumerate(tables):
@@ -67,11 +69,22 @@ class FitzExtractorLine:
 
             page_data["tables"] = table_data
 
-            # Step 3: Assign Widgets
+            # Step 4: Assign Widgets
             for rect, widget in widgets.items():
                 fid = self.global_fid
                 bbox = BoundingBox(l=rect.x0, t=rect.y0, r=rect.x1, b=rect.y1, rounding=self.rounding)
                 field_type = "checkbox" if "checkbox" in widget.field_name.lower() else "text_input"
+
+                field_type = widget.field_type  
+                field_flag = widget.field_flags
+                field_value = widget.field_value
+
+                field_type_str = {
+                    5: "button",
+                    7: "text",
+                    2: "choice",
+                    4: "signature"
+                }.get(field_type, "unknown")
 
                 assigned_table = None
                 for table in table_data:
@@ -84,6 +97,8 @@ class FitzExtractorLine:
                 min_distance = float("inf")
                 assigned_gid = None
 
+                
+
                 for (y0, y1), words in lines.items():
                     if words:
                         _, (_, line_y0, _, line_y1), _ = words[0]
@@ -92,7 +107,7 @@ class FitzExtractorLine:
                             min_distance = distance
                             closest_line = (y0, y1)
 
-                if closest_line and min_distance <= WIDGET_LINE_DISTANCE_THRESHOLD:
+                if closest_line and min_distance <= self.WIDGET_LINE_DISTANCE_THRESHOLD:
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
                         "CHECKBOX_FIELD" if field_type == "checkbox" else
@@ -102,24 +117,30 @@ class FitzExtractorLine:
                     assigned_gid = line_map[closest_line]
                 else:
                     new_line_key = (round(rect.y0, self.rounding), round(rect.y1, self.rounding))
-                    new_gid = self.global_id
-                    self.global_id += 1
-                    line_map[new_line_key] = new_gid
+                    if new_line_key not in line_map:
+                        line_map[new_line_key] = self.global_id
+                        self.global_id += 1
+                        lines[new_line_key] = []
+
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
                         "CHECKBOX_FIELD" if field_type == "checkbox" else
                         "BLANK_FIELD"
                     )
-                    lines[new_line_key] = [(f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 0)]
-                    assigned_gid = new_gid
+                    lines[new_line_key].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 0))
+                    assigned_gid = line_map[new_line_key]
 
                 self.fid_to_gid_map[fid] = assigned_gid
 
                 form_field = {
-                    "type": field_type,
+                    "type_inferred": field_tag,
+                    "field_type": field_type_str,
+                    "field_flag": field_flag,
                     "bbox": bbox.to_dict(),
                     "fid": fid,
+                    "page": page_num,
                     "field_name": widget.field_name if widget.field_name else None,
+                    "field_value": field_value,
                     "gid": assigned_gid
                 }
                 elements.append(form_field)
@@ -131,10 +152,11 @@ class FitzExtractorLine:
                 page_gids.append(assigned_gid)
                 self.global_fid += 1
 
-            # Step 4: Sort Lines
+            # Step 5: Sort Words & Widgets
             processed_lines = []
             page_pid = 1
-            for (y0, y1), words in sorted(lines.items(), key=lambda item: item[0][1]):
+            for (y0, y1) in sorted_line_keys:
+                words = lines[(y0, y1)]
                 sorted_words = sorted(words, key=lambda w: w[1][0])
                 if not sorted_words:
                     continue
@@ -153,25 +175,15 @@ class FitzExtractorLine:
                     "bbox": bbox.to_dict(),
                     "gid": line_map[(y0, y1)],
                     "pid": page_pid,
-                    "tid": global_tid
+                    "tid": global_tid,
+                    "page": page_num
                 })
                 global_tid += 1
                 page_pid += 1
 
-            # Step 5: Add Metadata
-            if page_fids:
-                start_fid = min(page_fids)
-                end_fid = max(page_fids)
-            else:
-                start_fid = -1
-                end_fid = -1
-
-            if page_gids:
-                start_gid = min(page_gids)
-                end_gid = max(page_gids)
-            else:
-                start_gid = -1
-                end_gid = -1
+            # Step 6: Add Metadata
+            start_fid, end_fid = (min(page_fids), max(page_fids)) if page_fids else (-1, -1)
+            start_gid, end_gid = (min(page_gids), max(page_gids)) if page_gids else (-1, -1)
 
             page_metadata = {
                 "start_fid": start_fid,
@@ -181,7 +193,6 @@ class FitzExtractorLine:
                 "end_gid": end_gid
             }
 
-            # Step 6: Save Page Data
             page_data["text_elements"] = processed_lines
             page_data["form_fields"] = elements
             page_data["metadata"] = page_metadata
@@ -191,6 +202,7 @@ class FitzExtractorLine:
         self.save_to_json(extracted_data, output_json)
         logger.info(f"Extraction completed and saved to: {output_json}")
         return extracted_data
+
 
     @staticmethod
     def save_to_json(data, output_json):
