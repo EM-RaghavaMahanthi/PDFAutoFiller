@@ -4,7 +4,7 @@ import json
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from src.mappers.base_mapper import BaseFieldMapper
+from mappers.base import BaseFieldMapper
 
 class SentenceTransformMapper(BaseFieldMapper):
     def __init__(self, model_name="all-MiniLM-L6-v2"):

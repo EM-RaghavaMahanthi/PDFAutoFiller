@@ -1,6 +1,6 @@
 # src/core/field_mapper.py
 import json
-from src.mappers.base_mapper import BaseFieldMapper
+from mappers.base import BaseFieldMapper
 from src.mappers.sentence_transform_mapper import SentenceTransformMapper
 
 class FieldMapper:

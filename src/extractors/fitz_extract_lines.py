@@ -1,22 +1,28 @@
+# src/extractors/fitz_extract_lines.py
 import fitz
-import json
 import re
 from src.models.bounding_box import BoundingBox
-from src.utils.logger import logger  
+from src.utils.logger import logger
+from src.extractors.base import BaseExtractor
+from src.utils.storage import save_json
+from src.utils.timing import timing_decorator
 
-class FitzExtractorLine:
+
+class FitzExtractorLine(BaseExtractor):
     """Extracts text, form fields, and tables from PDFs with sorted Global/Page IDs."""
 
-    def __init__(self, WIDGET_LINE_DISTANCE_THRESHOLD, rounding=1):
-        self.WIDGET_LINE_DISTANCE_THRESHOLD=WIDGET_LINE_DISTANCE_THRESHOLD
+    def __init__(self, config: dict):
+        self.WIDGET_LINE_DISTANCE_THRESHOLD = config.get("WIDGET_LINE_DISTANCE_THRESHOLD", 10)
+        self.rounding = config.get("rounding", 1)
         self.global_id = 1
         self.global_fid = 1
-        self.rounding = rounding
         self.fid_to_gid_map = {}
 
-    def extract(self, pdf_path, output_json="data/temp/extracted.json", WIDGET_LINE_DISTANCE_THRESHOLD=10):
-        logger.info(f"Starting extraction from PDF: {pdf_path}")
+    @timing_decorator
+    def extract(self,pdf_path, storage_config: dict) -> dict:
+
         doc = fitz.open(pdf_path)
+        logger.info(f"Starting extraction from PDF: {pdf_path}")
         extracted_data = {"pages": []}
         global_tid = 0
 
@@ -27,7 +33,7 @@ class FitzExtractorLine:
                 "form_fields": [],
                 "tables": [],
                 "table_cell_info": {}
-            }   
+            }
 
             elements = []
             words = page.get_text("words")
@@ -38,7 +44,6 @@ class FitzExtractorLine:
             page_gids = []
             page_fids = []
 
-            # Step 1: Extract Words
             for word in words:
                 x0, y0, x1, y1, text, *_ = word
                 line_key = (round(y0, self.rounding), round(y1, self.rounding))
@@ -49,13 +54,11 @@ class FitzExtractorLine:
                 else:
                     lines[line_key].append((text, (x0, y0, x1, y1), word[-1]))
 
-            # Step 2: Assign GIDs in visual order (sorted by y0)
             sorted_line_keys = sorted(lines.keys(), key=lambda k: k[0])
             for line_key in sorted_line_keys:
                 line_map[line_key] = self.global_id
                 self.global_id += 1
 
-            # Step 3: Extract Tables
             tables = page.find_tables()
             table_data = []
             for tid, table in enumerate(tables):
@@ -69,16 +72,12 @@ class FitzExtractorLine:
 
             page_data["tables"] = table_data
 
-            # Step 4: Assign Widgets
             for rect, widget in widgets.items():
                 fid = self.global_fid
                 bbox = BoundingBox(l=rect.x0, t=rect.y0, r=rect.x1, b=rect.y1, rounding=self.rounding)
-                field_type = "checkbox" if "checkbox" in widget.field_name.lower() else "text_input"
-
-                field_type = widget.field_type  
+                field_type = widget.field_type
                 field_flag = widget.field_flags
                 field_value = widget.field_value
-
                 field_type_str = {
                     5: "button",
                     7: "text",
@@ -97,8 +96,6 @@ class FitzExtractorLine:
                 min_distance = float("inf")
                 assigned_gid = None
 
-                
-
                 for (y0, y1), words in lines.items():
                     if words:
                         _, (_, line_y0, _, line_y1), _ = words[0]
@@ -110,7 +107,7 @@ class FitzExtractorLine:
                 if closest_line and min_distance <= self.WIDGET_LINE_DISTANCE_THRESHOLD:
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
-                        "CHECKBOX_FIELD" if field_type == "checkbox" else
+                        "CHECKBOX_FIELD" if field_type_str == "button" else
                         "BLANK_FIELD"
                     )
                     lines[closest_line].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 9999))
@@ -121,10 +118,9 @@ class FitzExtractorLine:
                         line_map[new_line_key] = self.global_id
                         self.global_id += 1
                         lines[new_line_key] = []
-
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
-                        "CHECKBOX_FIELD" if field_type == "checkbox" else
+                        "CHECKBOX_FIELD" if field_type_str == "button" else
                         "BLANK_FIELD"
                     )
                     lines[new_line_key].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 0))
@@ -152,7 +148,6 @@ class FitzExtractorLine:
                 page_gids.append(assigned_gid)
                 self.global_fid += 1
 
-            # Step 5: Sort Words & Widgets
             processed_lines = []
             page_pid = 1
             for (y0, y1) in sorted_line_keys:
@@ -181,7 +176,6 @@ class FitzExtractorLine:
                 global_tid += 1
                 page_pid += 1
 
-            # Step 6: Add Metadata
             start_fid, end_fid = (min(page_fids), max(page_fids)) if page_fids else (-1, -1)
             start_gid, end_gid = (min(page_gids), max(page_gids)) if page_gids else (-1, -1)
 
@@ -198,15 +192,6 @@ class FitzExtractorLine:
             page_data["metadata"] = page_metadata
             extracted_data["pages"].append(page_data)
 
-        # Step 7: Save Extracted Data
-        self.save_to_json(extracted_data, output_json)
-        logger.info(f"Extraction completed and saved to: {output_json}")
+        save_json(extracted_data, storage_config)
+        logger.info("Extraction completed.")
         return extracted_data
-
-
-    @staticmethod
-    def save_to_json(data, output_json):
-        """Saves extracted data to a JSON file."""
-        with open(output_json, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        logger.info(f"Extracted data saved to {output_json}")

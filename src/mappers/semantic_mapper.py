@@ -3,20 +3,33 @@ import json
 import re
 import tiktoken
 from math import ceil
-from src.llm.llm_selector import ClaudeLLM
+from src.llm.llm_selector import LLMSelector
 from src.utils.logger import logger
 from src.utils.timing import timing_decorator
 import time
 from src.chunkers import get_chunker
+from src.utils.storage import save_json
+
 
 class SemanticMapper:
-    def __init__(self, llm: ClaudeLLM, config: dict):
-        self.llm = llm
-        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.config = config
+    def __init__(self, method_config: dict, chunking_section: dict):
 
-        strategy = config.get("name", "page")  
-        self.chunker = get_chunker(strategy, self.tokenizer, **config)
+        # Initialize LLM
+        llm_name = method_config.get("llm", "claude")  # lowercase 'llm' to match YAML
+        self.llm = LLMSelector(provider=llm_name).llm
+
+        # Initialize tokenizer
+        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+        # Setup chunking strategy
+        strategy = chunking_section.get("current_strategy")
+
+        strategy_config = next(
+            (s for s in chunking_section.get("strategies", []) if s.get("name") == strategy),
+            {}
+        )
+        strategy_config["name"] = strategy  
+        self.chunker = get_chunker(strategy, self.tokenizer, **strategy_config)
         
     def prepare_updated_input_data(self, input_data):
         """Only keep list of keys, ignore values."""
@@ -168,14 +181,13 @@ Now begin and return only valid JSON.
 
 
     @timing_decorator
-    def process_and_save(self, pdf_path, input_json_path, output_dir="data/temp"):
-        os.makedirs(output_dir, exist_ok=True)
-        pdf_name = os.path.basename(pdf_path).replace(".pdf", "")
-        extracted_path = f"{output_dir}/extracted_{pdf_name}.json"
-        mapping_path = f"{output_dir}/mappings_{pdf_name}.json"
-        debug_path = f"{output_dir}/raw_llm_responses_{pdf_name}.jsonl"
+    def process_and_save(self, extracted_path, input_json_path, storage_config: dict, output_dir="data/temp/"):
 
-        logger.info(f"Starting Field Mapping for PDF: {pdf_path}")
+        mapping_path = storage_config.get("output_path")
+        file_stub = os.path.splitext(os.path.basename(mapping_path))[0]
+        debug_path = os.path.join(output_dir, f"raw_llm_responses_{file_stub}.jsonl")
+
+        logger.info(f"Starting Field Mapping for extracted file: {extracted_path}")
 
         with open(extracted_path, "r", encoding="utf-8") as f:
             extracted_data = json.load(f)
@@ -231,8 +243,7 @@ Now begin and return only valid JSON.
 
                 logger.info(f"{chunk_key}: Chunk processed in {(time.time() - chunk_start):.2f} seconds.")
 
-        with open(mapping_path, "w", encoding="utf-8") as f:
-            json.dump(final_flat_mapping, f, indent=2)
+        save_json(final_flat_mapping, storage_config)
 
         logger.info(f"Saved raw LLM responses to: {debug_path}")
         logger.info(f"Saved cleaned (deduplicated) field mappings to: {mapping_path}")

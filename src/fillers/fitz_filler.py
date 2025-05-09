@@ -3,10 +3,12 @@ import json
 import shutil
 import fitz 
 from src.utils.logger import logger
+from src.utils.storage import save_file
 
 class FitzFiller:
-    def __init__(self, fontsize=6):
-        self.fontsize = fontsize
+    def __init__(self, config: dict):
+        self.fontsize = config.get("fontsize", 6)
+        self.config = config
 
     def load_data(self, extracted_path, mapping_path):
         """Load extracted data and final mappings."""
@@ -34,7 +36,8 @@ class FitzFiller:
                 fid_bbox_map[fid] = (bbox, field_type, page["page_number"] - 1)
         return fid_bbox_map
 
-    def fill_pdf(self, pdf_path, extracted_path, mapping_path):
+    def fill_pdf(self, pdf_path, extracted_path, mapping_path, storage_config: dict):
+
         """Main function to fill PDF and return stats."""
         logger.info(f"Starting PDF Filling for: {pdf_path}")
 
@@ -44,7 +47,7 @@ class FitzFiller:
         total_form_fields = sum(len(p["form_fields"]) for p in extracted_data["pages"])
         logger.info(f"Total Form Fields in PDF: {total_form_fields}")
 
-        output_pdf_path = self.create_output_path(pdf_path)
+        output_pdf_path = os.path.join("/tmp", os.path.basename(storage_config.get("output_file", "filled_output.pdf")))
         shutil.copy(pdf_path, output_pdf_path)
         doc = fitz.open(output_pdf_path)
 
@@ -84,6 +87,7 @@ class FitzFiller:
                 logger.warning(f"Could not fill fid {fid}: {e}")
 
         doc.saveIncr()
+        save_file(output_pdf_path, storage_config, key_name="output_file")
 
         missing_value_count = total_fields - fillable_fields
 

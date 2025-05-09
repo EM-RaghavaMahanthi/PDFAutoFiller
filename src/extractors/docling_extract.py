@@ -1,19 +1,27 @@
-import json
+# src/extractors/docling_extractor.py
 import re
 from docling.document_converter import DocumentConverter
 from src.models.bounding_box import BoundingBox
+from src.extractors.base import BaseExtractor
+from src.utils.storage import save_json
+from src.utils.timing import timing_decorator
 
-class DoclingExtractor:
+
+class DoclingExtractor(BaseExtractor):
     """Extracts text and form fields from PDFs using Docling, handling multi-blanks correctly."""
 
-    def __init__(self):
+    def __init__(self, config: dict):
+        self.config = config
         self.converter = DocumentConverter()
         self.global_id = 1
 
-    def extract(self, pdf_path, output_json="data/temp/extracted.json"):
-        """Extracts text, form fields, and properly segments multiple blanks."""
+    @timing_decorator
+    def extract(self, pdf_path, storage_config: dict) -> dict:
 
+        
         result = self.converter.convert(pdf_path)
+        
+
         extracted_data = {"pages": []}
 
         for page_no, page in enumerate(result.pages):
@@ -25,42 +33,36 @@ class DoclingExtractor:
 
             page_pid = 1
 
-            # Process Text Cells
             for cell in page.cells:
                 bbox = BoundingBox(
-                    l=cell.bbox.l, t=cell.bbox.t, r=cell.bbox.r, b=cell.bbox.b, 
+                    l=cell.bbox.l, t=cell.bbox.t, r=cell.bbox.r, b=cell.bbox.b,
                     page_number=page_no + 1, field_id=f"text_{cell.id}"
                 )
 
-                # Split normal text and form fields
                 text_parts, blank_parts = self.split_text_and_blanks(cell.text, bbox)
 
-                # Add text elements
                 for text, b, i in text_parts:
                     page_data["text_elements"].append({"text": text, "bbox": b.to_dict(), "gid": self.global_id+i, "pid": page_pid+i})
 
-
-                # Add form fields (blanks)
                 for b, i in blank_parts:
                     page_data["form_fields"].append({"type": "text_input", "bbox": b.to_dict(), "gid": self.global_id+i, "pid": page_pid+i})
 
-                page_pid += len(text_parts)+len(blank_parts)
-                self.global_id+= len(text_parts)+len(blank_parts)
-            
+                page_pid += len(text_parts) + len(blank_parts)
+                self.global_id += len(text_parts) + len(blank_parts)
+
             for form_field in page.predictions.layout.clusters:
                 if form_field.label in ["checkbox", "text_input"]:
                     bbox = BoundingBox(
-                        l=form_field.bbox.l, t=form_field.bbox.t, r=form_field.bbox.r, b=form_field.bbox.b, 
+                        l=form_field.bbox.l, t=form_field.bbox.t, r=form_field.bbox.r, b=form_field.bbox.b,
                         page_number=page_no + 1, field_id=f"field_{form_field.id}"
                     )
                     page_data["form_fields"].append({"type": form_field.label, "bbox": bbox.to_dict(), "gid": self.global_id, "pid": page_pid})
-                    page_pid+=1
-                    self.global_id+=1
+                    page_pid += 1
+                    self.global_id += 1
 
             extracted_data["pages"].append(page_data)
 
-        # Save extracted data
-        self.save_to_json(extracted_data, output_json)
+        save_json(extracted_data, storage_config)
         return extracted_data
 
     def split_text_and_blanks(self, text, bbox):
@@ -72,12 +74,11 @@ class DoclingExtractor:
         char_width = bbox.width / total_length
         current_x = bbox.l
         prev_end = 0
-        id = 0  # Initialize the local identifier for elements within this cell
+        id = 0
 
         for match in matches:
             start, end = match.span()
 
-            # Handle text before the blank, if any
             if start > prev_end:
                 text_bbox = BoundingBox(
                     l=current_x, t=bbox.t, width=(start - prev_end) * char_width, height=bbox.height,
@@ -85,19 +86,17 @@ class DoclingExtractor:
                 )
                 text_parts.append((text[prev_end:start].strip(), text_bbox, id))
                 current_x += (start - prev_end) * char_width
-                id += 1  # Increment the local identifier
+                id += 1
 
-            # Handle the blank space
             blank_bbox = BoundingBox(
                 l=current_x, t=bbox.t, width=(end - start) * char_width, height=bbox.height,
                 page_number=bbox.page_number, field_id=f"{bbox.field_id}_blank{id}"
             )
             blank_parts.append((blank_bbox, id))
             current_x += (end - start) * char_width
-            id += 1  # Increment the local identifier
+            id += 1
             prev_end = end
 
-        # Handle text after the last blank, if any
         if prev_end < total_length:
             text_bbox = BoundingBox(
                 l=current_x, t=bbox.t, width=(total_length - prev_end) * char_width, height=bbox.height,
@@ -106,11 +105,3 @@ class DoclingExtractor:
             text_parts.append((text[prev_end:].strip(), text_bbox, id))
 
         return text_parts, blank_parts
-
-
-    @staticmethod
-    def save_to_json(data, output_json):
-        """Saves extracted data to a JSON file."""
-        with open(output_json, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        print(f"Extracted data saved to {output_json}")

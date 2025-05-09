@@ -2,7 +2,7 @@ from .base import BaseChunker
 from src.utils.logger import logger
 
 class PageBasedChunker(BaseChunker):
-    def __init__(self, tokenizer, chunk_size=12, overlap=1):
+    def __init__(self, tokenizer, chunk_size, overlap):
         super().__init__(tokenizer)
         self.chunk_size = chunk_size
         self.overlap = overlap

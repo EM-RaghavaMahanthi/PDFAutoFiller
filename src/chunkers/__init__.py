@@ -1,12 +1,17 @@
 from .page_chunker import PageBasedChunker
 from .window_chunker import WindowBasedChunker
+from src.utils.logger import logger
 
 def get_chunker(strategy_name, tokenizer, **kwargs):
+
+    logger.info(f"Initializing chunker strategy: {strategy_name}")
+    logger.info(f"Chunker parameters: {kwargs}")
+
     if strategy_name == "page":
         return PageBasedChunker(
             tokenizer,
-            chunk_size=kwargs.get("chunk_size", 12),
-            overlap=kwargs.get("overlap", 1),
+            chunk_size=kwargs.get("chunk_size"),
+            overlap=kwargs.get("overlap"),
         )
     elif strategy_name == "window":
         return WindowBasedChunker(
