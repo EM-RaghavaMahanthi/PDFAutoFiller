@@ -7,6 +7,8 @@ from src.mappers import get_mapper_by_name
 import yaml
 import os
 
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
 router = APIRouter()
 
 @router.post("/map-fields")
@@ -48,9 +50,6 @@ def map_fields(request: MapFieldsRequest):
     # Download extracted and input JSON files
     temp_extracted_path = download_to_tempfile(storage_config, key_name="extracted_key", suffix=".json")
     temp_input_json_path = download_to_tempfile(storage_config, key_name="input_json_path", suffix=".json")
-
-
-    print("\n\n\n\n\n", chunking_config, "\n\n\n\n\n")
 
     try:
         # Initialize and invoke mapper

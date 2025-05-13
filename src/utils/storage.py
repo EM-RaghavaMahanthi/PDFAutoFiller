@@ -2,10 +2,12 @@
 import os
 import json
 import boto3
+import io
 import tempfile
 import shutil
 from botocore.exceptions import BotoCoreError, ClientError
 from src.utils.logger import logger
+import numpy as np
 
 def save_json(data: dict, storage_config: dict) -> str:
     storage_type = storage_config.get("name", "local")
@@ -133,3 +135,26 @@ def save_file(local_path: str, storage_config: dict, key_name: str = "output_fil
 
     else:
         raise NotImplementedError(f"Storage type '{storage_type}' is not supported for saving.")
+
+
+def save_numpy_array(array: np.ndarray, path: str, storage_config: dict):
+    storage_type = storage_config.get("name", "local")
+    if not path or array is None:
+        logger.warning("No path or array provided for saving numpy data.")
+        return
+
+    if storage_type == "local":
+        np.save(path, array)
+        logger.info(f"Saved numpy array to local: {path}")
+    elif storage_type == "s3":
+        bucket = storage_config.get("bucket")
+        region = storage_config.get("region", "us-east-1")
+        s3 = boto3.client("s3", region_name=region)
+
+        buf = io.BytesIO()
+        np.save(buf, array)
+        buf.seek(0)
+        s3.upload_fileobj(buf, bucket, path)
+        logger.info(f"Uploaded numpy array to S3: s3://{bucket}/{path}")
+    else:
+        raise NotImplementedError(f"Unsupported storage type: {storage_type}")
