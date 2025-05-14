@@ -50,6 +50,8 @@ def map_fields(request: MapFieldsRequest):
     # Download extracted and input JSON files
     temp_extracted_path = download_to_tempfile(storage_config, key_name="extracted_key", suffix=".json")
     temp_input_json_path = download_to_tempfile(storage_config, key_name="input_json_path", suffix=".json")
+    temp_key_variants_path = download_to_tempfile(storage_config, key_name="input_key_json_variants_path", suffix=".json")
+    field_names_variants_path = download_to_tempfile(storage_config, key_name="field_names_json_variants_path", suffix=".json")
 
     try:
         # Initialize and invoke mapper
@@ -57,7 +59,9 @@ def map_fields(request: MapFieldsRequest):
         mapping_path = mapper.process_and_save(
             temp_extracted_path,
             temp_input_json_path,
-            storage_config
+            storage_config,
+            temp_key_variants_path,
+            field_names_variants_path
         )
     finally:
         cleanup_temp_file(temp_extracted_path, delete=False)

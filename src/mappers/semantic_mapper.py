@@ -18,6 +18,9 @@ class SemanticMapper:
         llm_name = method_config.get("llm", "claude")  # lowercase 'llm' to match YAML
         self.llm = LLMSelector(provider=llm_name).llm
 
+        self.include_key_variants = method_config.get("include_key_variants", 0)
+        self.include_field_name_variants = method_config.get("include_field_name_variants", 0)
+
         # Initialize tokenizer
         self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
@@ -34,154 +37,260 @@ class SemanticMapper:
     def prepare_updated_input_data(self, input_data):
         """Only keep list of keys, ignore values."""
         return list(input_data.keys())
+    
+    def build_input_key_section(self, input_keys: list, key_variants: dict = None) -> str:
+        if not key_variants:
+            return f"""
+    ---
+    Input Keys:
+    You are given a flat list of semantic keys:
+    {json.dumps(input_keys, indent=2)}
 
-    def prepare_prompt(self, context_text, input_keys, fid_start, fid_end):
-        prompt = f"""
-You are a highly reliable document assistant that must semantically fill fields in a PDF form using the provided field context and a list of known keys.
+    - These are the only allowed key labels.
+    - Do not invent, reword, interpret, or create new labels.
+    - Only return exact matches from this list in your output's "key" field.
+    """
+        else:
+            return f"""
+    ---
+    Input Key Variants:
+    You are given a dictionary of semantic key variants.
+    Each key has multiple equivalent phrasings that may be used in form labels:
 
-You must follow all instructions very carefully. Do not infer values, do not hallucinate, and do not change the required structure under any circumstance.
+    {json.dumps(key_variants, indent=2)}
 
-Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
-
----
----
-
-PDF Context:
-Below is the extracted, line-by-line text from the PDF. It includes tagged form fields that require semantic interpretation.
-
------
------
-{context_text}
------
------
-
-Each field tag is marked using one of the following formats:
-- [FIELD:{{fid}}]
-- [BLANK_FIELD:{{fid}}]
-- [TABLE_CELL_FIELD:{{fid}}]
-- [CHECKBOX_FIELD:{{fid}}]
-
-Each fid is a numeric field ID like 11, 12, 24, etc.
-
----
-
-Input Keys:
-You are given a flat list of semantic keys:
-{json.dumps(input_keys, indent=2)}
-
-- These are the only allowed key labels.
-- Do not invent, reword, interpret, or create new labels.
-- Only return exact matches from this list in your output's "key" field.
-
----
-
----
-
-Fid start: {fid_start} and Fid end:{fid_end}
-
-Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
-
----
+    - You must match the field context to one of the variants.
+    - Then, return the original key corresponding to that variant.
+    - Do not return the variant — only the original key.
+    - Only use keys from the original input_keys list.
+    """
 
 
-Your Task:
-1. For each tagged field (e.g., [BLANK_FIELD:12]) found in the context, analyze the surrounding label to determine what it is asking for.
-1.1 Return only and exactly the fids (field IDs) present in the context. Do not add any fids that are not explicitly tagged in the context text, even if you think they are related
-2. Based on the semantic meaning of that field label, identify the best-matching key from the input list.
-3. Then, place that matched key (exact string) in the "key" field for that fid. Do not use the label itself.
-4. If no strong match exists, set "key": null and "con": 0.
+    def build_key_matching_rules(self, key_variants: dict = None) -> str:
+        if not key_variants:
+            return """
+    ---
+    Key Matching from Input Only:
+    - You must identify what the field is asking for, then select the corresponding label from the input_keys list.
+    - The "key" must be a value from the input list only.
+    - Do not write inferred or paraphrased labels like "Amount of Investment" unless that exact string is in input_keys.
+    - Always return the best matching input key from the list, or null if no clear match.
+    """
+        else:
+            return """
+    ---
+    Key Matching from Input Variants:
+    - You are provided with multiple semantic variants (alternative phrasings) for each input key.
+    - Your task is to match the semantic meaning of each field (based on its label/context) to the most relevant variant.
+    - Then, return the original key whose variant had the best semantic match.
+    - Do not invent or infer keys outside the provided list.
+    - The "key" in your final output must be from the original input_keys list — even though matching is done on variants.
+    - If none of the variants semantically match well, set "key": null and "con": 0.
 
----
+    Example:
+    If one of the input keys is "investor_full_name" and its variants include:
+    - "Full Name of Investor"
+    - "Name of the Individual Investor"
+    - "Investor’s Legal Name"
 
-Field ID Format:
-- The keys in your output JSON must be the raw integer fid values from the context.
-- For example, if the tag is [BLANK_FIELD:11], your JSON should have:
-  "11": {{ "key": ..., "con": ... }}
-- Never write "fid11" or similar. Use "11" as the string key.
-- Output key = field number only.
+    And the field label is "Investor Name", then you may semantically match it to one of these variants, and return:
+    "key": "investor_full_name"
+    """
+        
+    def build_field_name_variant_section(self, field_name_variants: dict) -> str:
+        """
+        Builds a section for the prompt describing semantic variants of field names per fid.
 
-Key Matching from Input Only:
-- You must identify what the field is asking for, then select the corresponding label from the input_keys list.
-- The "key" must be a value from the input list only.
-- Do not write inferred or paraphrased labels like "Amount of Investment" unless that exact string is in input_keys.
-- Always return the best matching input key from the list, or null if no clear match.
+        Args:
+            field_name_variants (dict): Dictionary where each key is fid (as str) and value is list of semantic variants,
+                                        with the last item being the original field_name.
 
----
+        Returns:
+            str: A formatted section describing the variants for use in prompt instructions.
+        """
+        if not field_name_variants:
+            return ""
 
-Semantic Matching:
-- Use only the line of text that contains the [FIELD:X] tag to understand its label.
-- Do not use unrelated or far-away lines.
-- Do not assume meaning. Only use what is clearly visible and relevant.
+        lines = [
+            "---",
+            "Field Name Variants:",
+            "You are provided with multiple semantic variants for certain form fields (by fid).",
+            "These are alternative phrasings of the field’s intent. The last item in each list is the original field_name.",
+            "Use these to better understand the context, but do not use them as input keys.",
+            "",
+            "FID → Field Name and Variants:"
+        ]
 
-Person vs. Entity Detection:
-- If the label includes terms like "person", "individual", "investor", "whose", or "applicant", it likely refers to a human.
-- If it includes "company", "organization", or "fund", it likely refers to an entity.
-- Use this judgment when mapping date fields or identity fields.
+        for fid, variants in field_name_variants.items():
+            original_field_name = variants[-1]
+            lines.append(f"\nFID {fid} ({original_field_name}):")
+            for variant in variants[:-1]:
+                lines.append(f"- {variant}")
+            lines.append(f"- {original_field_name} (original)")
 
-Special Date Rule:
-- "Date of Birth" refers to a person's birth date only.
-- "Inception Date", "Formation Date", etc., refer to companies or entities only.
-- Never match a Date of Birth field to any key that contains "InceptionDate".
-- If unsure, return "key": null.
+        lines.append("\nUse these to improve your semantic judgment. Do not use them as keys in your output.")
+        lines.append("---")
 
-Checkbox Handling:
-- If a label implies Yes/No (like "I confirm", "Is this correct?"), you may treat blanks as checkboxes.
-- Still, match only by the label’s semantic meaning to a valid key.
+        return "\n".join(lines)
 
----
 
-Confidence Score:
-You must provide a "con" value with the following rules:
-- 0.90 – 1.00 → Very strong and clear semantic match
-- 0.60 – 0.89 → Moderate certainty
-- 0.30 – 0.59 → Weak match
-- 0.00 – 0.29 → No match → set "key": null
 
-Do not assign high confidence unless the match is clear and unambiguous.
+    def prepare_prompt(self, context_text, input_keys, fid_start, fid_end, key_variants, field_name_variants):
+        instructions_header = """
+    You are a highly reliable document assistant that must semantically fill fields in a PDF form using the provided field context and a list of known keys.
 
----
+    You must follow all instructions very carefully. Do not infer values, do not hallucinate, and do not change the required structure under any circumstance.
 
-Expected Output Format:
-Return JSON structured exactly like this:
+    Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    """
 
-{{
-  "11": {{
-    "key": "input_key_name",
-    "con": 0.92
-  }},
-  "12": {{
-    "key": null,
-    "con": 0
-  }},
-  "24": {{
-    "key": "another_input_key",
-    "con": 0.88
-  }}
-}}
+        pdf_context_section = f"""
+    ---
+    PDF Context:
+    Below is the extracted, line-by-line text from the PDF. It includes tagged form fields that require semantic interpretation.
 
-Rules:
-- Field IDs (keys) must be numeric strings like "11", "12", etc.
-- Only return field IDs that appear in the provided context chunk not more not less( very strict)Return only and exactly the fids (field IDs) present in the context. Do not add any fids that are not explicitly tagged in the context text, even if you think they are related.
-- Do not return any extra or missing fids.
-- Do not include any other text, explanation, or comments. Only valid JSON.
-- Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    -----
+    {context_text}
+    -----
+    Each field tag is marked using one of the following formats:
+    - [FIELD:{{fid}}]
+    - [BLANK_FIELD:{{fid}}]
+    - [TABLE_CELL_FIELD:{{fid}}]
+    - [CHECKBOX_FIELD:{{fid}}]
 
----
+    Each fid is a numeric field ID like 11, 12, 24, etc.
+    """
 
-Final Reminders:
-- Only use keys found in the input list
-- Output keys = numeric fids (e.g., "11"), not "fid11"
-- Confidence score must reflect real certainty
-- Return only fids tagged in the current context
-- Do not guess, hallucinate, reword, or over-infer
-- Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
-Now begin and return only valid JSON.
-"""
-        return prompt
+        input_keys_section = self.build_input_key_section(input_keys, key_variants)
+
+        fid_range_info = f"""
+    ---
+    Fid start: {fid_start} and Fid end: {fid_end}
+
+    Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    """
+
+        task_description = """
+    ---
+    Your Task:
+    1. For each tagged field (e.g., [BLANK_FIELD:12]) found in the context, analyze the surrounding label to determine what it is asking for.
+    1.1 Return only and exactly the fids (field IDs) present in the context. Do not add any fids that are not explicitly tagged in the context text, even if you think they are related.
+    2. Based on the semantic meaning of that field label, identify the best-matching key from the input list.
+    3. Then, place that matched key (exact string) in the "key" field for that fid. Do not use the label itself.
+    4. If no strong match exists, set "key": null and "con": 0.
+    """
+
+        formatting_rules = """
+    ---
+    Field ID Format:
+    - The keys in your output JSON must be the raw integer fid values from the context.
+    - For example, if the tag is [BLANK_FIELD:11], your JSON should have:
+    "11": { "key": ..., "con": ... }
+    - Never write "fid11" or similar. Use "11" as the string key.
+    - Output key = field number only.
+    """
+
+        key_matching_rules = self.build_key_matching_rules(key_variants)
+        field_name_section = self.build_field_name_variant_section(field_name_variants)
+
+        semantic_tips = """
+    ---
+    Semantic Matching:
+    - Use only the line of text that contains the [FIELD:X] tag to understand its label.
+    - Do not use unrelated or far-away lines.
+    - Do not assume meaning. Only use what is clearly visible and relevant.
+
+    Person vs. Entity Detection:
+    - If the label includes terms like "person", "individual", "investor", "whose", or "applicant", it likely refers to a human.
+    - If it includes "company", "organization", or "fund", it likely refers to an entity.
+    - Use this judgment when mapping date fields or identity fields.
+
+    Special Date Rule:
+    - "Date of Birth" refers to a person's birth date only.
+    - "Inception Date", "Formation Date", etc., refer to companies or entities only.
+    - Never match a Date of Birth field to any key that contains "InceptionDate".
+    - If unsure, return "key": null.
+
+    Checkbox Handling:
+    - If a label implies Yes/No (like "I confirm", "Is this correct?"), you may treat blanks as checkboxes.
+    - Still, match only by the label’s semantic meaning to a valid key.
+    """
+
+        confidence_score_rules = """
+    ---
+    Confidence Score:
+    You must provide a "con" value with the following rules:
+    - 0.90 – 1.00 → Very strong and clear semantic match
+    - 0.60 – 0.89 → Moderate certainty
+    - 0.30 – 0.59 → Weak match
+    - 0.00 – 0.29 → No match → set "key": null
+
+    Do not assign high confidence unless the match is clear and unambiguous.
+    """
+
+        output_format = """
+    ---
+    Expected Output Format:
+    Return JSON structured exactly like this:
+
+    {
+    "11": {
+        "key": "input_key_name",
+        "con": 0.92
+    },
+    "12": {
+        "key": null,
+        "con": 0
+    },
+    "24": {
+        "key": "another_input_key",
+        "con": 0.88
+    }
+    }
+
+    Rules:
+    - Field IDs (keys) must be numeric strings like "11", "12", etc.
+    - Only return field IDs that appear in the provided context chunk — not more, not less.
+    - Do not return any extra or missing fids.
+    - Do not include any other text, explanation, or comments. Only valid JSON.
+    - Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    """
+
+        closing_note = """
+    ---
+    Final Reminders:
+    - Only use keys found in the input list
+    - Output keys = numeric fids (e.g., "11"), not "fid11"
+    - Confidence score must reflect real certainty
+    - Return only fids tagged in the current context
+    - Do not guess, hallucinate, reword, or over-infer
+    - Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+
+    Now begin and return only valid JSON.
+    """
+
+        return "\n".join([
+            instructions_header,
+            pdf_context_section,
+            input_keys_section,
+            fid_range_info,
+            task_description,
+            formatting_rules,
+            key_matching_rules,
+            field_name_section,
+            semantic_tips,
+            confidence_score_rules,
+            output_format,
+            closing_note
+        ])
+
 
 
     @timing_decorator
-    def process_and_save(self, extracted_path, input_json_path, storage_config: dict, output_dir="data/temp/"):
+    def process_and_save(self, extracted_path, input_json_path, storage_config: dict, 
+                        input_key_json_variants_path: str = None,
+                        field_names_json_variants_path: str = None, 
+                        output_dir="data/temp/"):
 
         mapping_path = storage_config.get("output_path")
         file_stub = os.path.splitext(os.path.basename(mapping_path))[0]
@@ -193,6 +302,21 @@ Now begin and return only valid JSON.
             extracted_data = json.load(f)
         with open(input_json_path, "r", encoding="utf-8") as f:
             input_data = json.load(f)
+
+        input_variants = {}
+        if self.include_key_variants and input_key_json_variants_path and os.path.exists(input_key_json_variants_path):
+            logger.info("Including key variants in the prompt.")
+            with open(input_key_json_variants_path, "r", encoding="utf-8") as vf:
+                input_variants = json.load(vf)
+            logger.info(f"Loaded input key variants from {input_key_json_variants_path} ({len(input_variants)} entries)")
+
+        field_name_variants = {}
+        if self.include_field_name_variants and field_names_json_variants_path and os.path.exists(field_names_json_variants_path):
+            logger.info("Including field name variants in the prompt.")
+            with open(field_names_json_variants_path, "r", encoding="utf-8") as fvf:
+                field_name_variants = json.load(fvf)
+            logger.info(f"Loaded field name variants from {field_names_json_variants_path} ({len(field_name_variants)} entries)")
+
 
         keys_only = self.prepare_updated_input_data(input_data)
         context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
@@ -214,7 +338,17 @@ Now begin and return only valid JSON.
                     continue
 
                 chunk_start = time.time()
-                prompt = self.prepare_prompt(context_text, keys_only, start_fid, end_fid)
+                field_name_variants_fids = {}
+                if self.include_field_name_variants and field_name_variants:
+                    for fid_str, variants in field_name_variants.items():
+                        try:
+                            fid = int(fid_str)
+                            if start_fid <= fid <= end_fid:
+                                field_name_variants_fids[str(fid)] = variants
+                        except ValueError:
+                            logger.warning(f"Invalid fid in field_name_variants: {fid_str}")
+
+                prompt = self.prepare_prompt(context_text, keys_only, start_fid, end_fid, input_variants, field_name_variants_fids)
                 input_tokens = len(self.tokenizer.encode(prompt))
 
                 response = self.llm.complete(prompt)

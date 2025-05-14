@@ -37,146 +37,166 @@ class FeedbackSemanticMapper(SemanticMapper):
         logger.info(f"Chunking strategy selected: {strategy}")
 
     def prepare_feedback_prompt(self, context_text, input_keys, initial_mapping, fid_start, fid_end):
-        prompt = f"""
-You are a highly reliable document assistant acting as a feedback corrector.
+        instructions = """
+    You are a highly reliable document assistant acting as a feedback corrector.
 
-You are given:
-1. A list of known semantic input keys.
-2. PDF context text which includes form field markers.
-3. An initial field-to-key mapping predicted by another LLM (called "initial mapping").
+    You are given:
+    1. A list of known semantic input keys.
+    2. PDF context text which includes form field markers.
+    3. An initial field-to-key mapping predicted by another LLM (called "initial mapping").
 
-Your task is to re-evaluate the initial mapping and correct any mistakes. 
-If a field is already mapped correctly to the right input key, retain it. 
-If the mapping seems wrong, replace it with the best-matching input key.
-If no confident match is found, set "key": null and "con": 0.
+    Your task is to re-evaluate the initial mapping and correct any mistakes. 
+    If a field is already mapped correctly to the right input key, retain it. 
+    If the mapping seems wrong, replace it with the best-matching input key.
+    If no confident match is found, set "key": null and "con": 0.
 
-Initial Mapping Format (you are expected to overwrite this if needed):
-{json.dumps(initial_mapping, indent=2)}
+    Only modify the mappings of fields explicitly found in the context between fid_start and fid_end.
+    """
 
-Only modify the mappings of fields explicitly found in the context between fid_start and fid_end.
+        initial_mapping_block = f"""
+    ---
+    Initial Mapping Format (you are expected to overwrite this if needed):
+    {json.dumps(initial_mapping, indent=2)}
+    """
 
----
----
+        context_block = f"""
+    ---
+    PDF Context:
+    Below is the extracted, line-by-line text from the PDF. It includes tagged form fields that require semantic interpretation.
 
-PDF Context:
-Below is the extracted, line-by-line text from the PDF. It includes tagged form fields that require semantic interpretation.
+    -----
+    {context_text}
+    -----
 
------
------
-{context_text}
------
------
+    Each field tag is marked using one of the following formats:
+    - [FIELD:{{fid}}]
+    - [BLANK_FIELD:{{fid}}]
+    - [TABLE_CELL_FIELD:{{fid}}]
+    - [CHECKBOX_FIELD:{{fid}}]
 
-Each field tag is marked using one of the following formats:
-- [FIELD:{{fid}}]
-- [BLANK_FIELD:{{fid}}]
-- [TABLE_CELL_FIELD:{{fid}}]
-- [CHECKBOX_FIELD:{{fid}}]
+    Each fid is a numeric field ID like 11, 12, 24, etc.
+    """
 
-Each fid is a numeric field ID like 11, 12, 24, etc.
+        input_keys_block = f"""
+    ---
+    Input Keys:
+    You are given a flat list of semantic keys:
+    {json.dumps(input_keys, indent=2)}
 
----
+    - These are the only allowed key labels.
+    - Do not invent, reword, interpret, or create new labels.
+    - Only return exact matches from this list in your output's "key" field.
+    """
 
-Input Keys:
-You are given a flat list of semantic keys:
-{json.dumps(input_keys, indent=2)}
+        fid_range_info = f"""
+    ---
+    Fid start: {fid_start} and Fid end: {fid_end}
 
-- These are the only allowed key labels.
-- Do not invent, reword, interpret, or create new labels.
-- Only return exact matches from this list in your output's "key" field.
+    Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    """
 
----
+        task_description = """
+    ---
+    Your Task:
+    1. Review the previous mapping.
+    2. For each tagged field in the context, determine whether the initially mapped key is the best match.
+    3. If it's wrong, replace it with the correct one from the input key list.
+    4. If you're not confident, set "key": null and "con": 0.
+    5. Return the output in exactly the same JSON format.
+    """
 
----
+        format_rules = """
+    ---
+    Field ID Format:
+    - The keys in your output JSON must be the raw integer fid values from the context.
+    - For example, if the tag is [BLANK_FIELD:11], your JSON should have:
+    "11": { "key": ..., "con": ... }
+    - Never write "fid11" or similar. Use "11" as the string key.
+    """
 
-Fid start: {fid_start} and Fid end: {fid_end}
+        semantic_guidance = """
+    ---
+    Semantic Matching:
+    - Use only the line of text that contains the [FIELD:X] tag to understand its label.
+    - Do not use unrelated or far-away lines.
+    - Do not assume meaning. Only use what is clearly visible and relevant.
 
-Only give the fids between fid_start and fid_end very strict. Don't include extra fids in output
+    Person vs. Entity Detection:
+    - If the label includes terms like "person", "individual", "investor", "whose", or "applicant", it likely refers to a human.
+    - If it includes "company", "organization", or "fund", it likely refers to an entity.
+    - Use this judgment when mapping date fields or identity fields.
 
----
+    Special Date Rule:
+    - "Date of Birth" refers to a person's birth date only.
+    - "Inception Date", "Formation Date", etc., refer to companies or entities only.
+    - Never match a Date of Birth field to any key that contains "InceptionDate".
+    - If unsure, return "key": null.
 
+    Checkbox Handling:
+    - If a label implies Yes/No (like "I confirm", "Is this correct?"), you may treat blanks as checkboxes.
+    - Still, match only by the label’s semantic meaning to a valid key.
+    """
 
-Your Task:
-1. Review the previous mapping.
-2. For each tagged field in the context, determine whether the initially mapped key is the best match.
-3. If it's wrong, replace it with the correct one from the input key list.
-4. If you're not confident, set "key": null and "con": 0.
-5. Return the output in exactly the same JSON format.
+        confidence_rules = """
+    ---
+    Confidence Score:
+    You must provide a "con" value with the following rules:
+    - 0.90 – 1.00 → Very strong and clear semantic match
+    - 0.60 – 0.89 → Moderate certainty
+    - 0.30 – 0.59 → Weak match
+    - 0.00 – 0.29 → No match → set "key": null
+    """
 
----
+        expected_format = """
+    ---
+    Expected Output Format:
+    {
+    "11": {
+        "key": "input_key_name",
+        "con": 0.92
+    },
+    "12": {
+        "key": null,
+        "con": 0
+    },
+    "24": {
+        "key": "another_input_key",
+        "con": 0.88
+    }
+    }
 
-Field ID Format:
-- The keys in your output JSON must be the raw integer fid values from the context.
-- For example, if the tag is [BLANK_FIELD:11], your JSON should have:
-  "11": {{ "key": ..., "con": ... }}
-- Never write "fid11" or similar. Use "11" as the string key.
+    Rules:
+    - Field IDs (keys) must be numeric strings like "11", "12", etc.
+    - Only return field IDs that appear in the provided context chunk not more not less (very strict).
+    - Do not return any extra or missing fids.
+    - Do not include any other text, explanation, or comments. Only valid JSON.
+    """
 
----
+        closing_note = """
+    ---
+    Final Reminders:
+    - Use only keys from the input list
+    - Keep field keys numeric (e.g., "11"), not "fid11"
+    - Match only the fields in the context and within fid_start and fid_end
+    - Do not hallucinate, guess, or over-infer
 
-Semantic Matching:
-- Use only the line of text that contains the [FIELD:X] tag to understand its label.
-- Do not use unrelated or far-away lines.
-- Do not assume meaning. Only use what is clearly visible and relevant.
+    Now begin and return only valid JSON.
+    """
 
-Person vs. Entity Detection:
-- If the label includes terms like "person", "individual", "investor", "whose", or "applicant", it likely refers to a human.
-- If it includes "company", "organization", or "fund", it likely refers to an entity.
-- Use this judgment when mapping date fields or identity fields.
+        return "\n".join([
+            instructions,
+            initial_mapping_block,
+            context_block,
+            input_keys_block,
+            fid_range_info,
+            task_description,
+            format_rules,
+            semantic_guidance,
+            confidence_rules,
+            expected_format,
+            closing_note
+        ])
 
-Special Date Rule:
-- "Date of Birth" refers to a person's birth date only.
-- "Inception Date", "Formation Date", etc., refer to companies or entities only.
-- Never match a Date of Birth field to any key that contains "InceptionDate".
-- If unsure, return "key": null.
-
-Checkbox Handling:
-- If a label implies Yes/No (like "I confirm", "Is this correct?"), you may treat blanks as checkboxes.
-- Still, match only by the label’s semantic meaning to a valid key.
-
----
-
-Confidence Score:
-You must provide a "con" value with the following rules:
-- 0.90 – 1.00 → Very strong and clear semantic match
-- 0.60 – 0.89 → Moderate certainty
-- 0.30 – 0.59 → Weak match
-- 0.00 – 0.29 → No match → set "key": null
-
----
-
-Expected Output Format:
-{{
-  "11": {{
-    "key": "input_key_name",
-    "con": 0.92
-  }},
-  "12": {{
-    "key": null,
-    "con": 0
-  }},
-  "24": {{
-    "key": "another_input_key",
-    "con": 0.88
-  }}
-}}
-
-Rules:
-- Field IDs (keys) must be numeric strings like "11", "12", etc.
-- Only return field IDs that appear in the provided context chunk not more not less (very strict).
-- Do not return any extra or missing fids.
-- Do not include any other text, explanation, or comments. Only valid JSON.
-
----
-
-Final Reminders:
-- Use only keys from the input list
-- Keep field keys numeric (e.g., "11"), not "fid11"
-- Match only the fields in the context and within fid_start and fid_end
-- Do not hallucinate, guess, or over-infer
-
-Now begin and return only valid JSON.
-"""
-        return prompt
 
     @timing_decorator
     def process_and_save(self, extracted_path, input_json_path, storage_config: dict, output_dir="data/temp/"):
