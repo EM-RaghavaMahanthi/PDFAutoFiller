@@ -68,7 +68,6 @@ class TypeValidator(BaseValidator):
         local_path = os.path.join("/tmp", os.path.basename(output_file))
         df.to_csv(local_path, index=False)
 
-        print(local_path, storage_config["output_file"])
         final_path = save_file(local_path, storage_config, key_name="output_file")
         logger.info(f"Validation stats saved to: {final_path}")
 

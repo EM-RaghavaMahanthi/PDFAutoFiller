@@ -9,9 +9,7 @@ class EmbedModelSelector:
     def __init__(self, embedding_config: dict):
         self.provider = embedding_config.get("current_provider", "huggingface").lower()
         self.full_config = load_config().get("embedding", {})
-        print(self.full_config)
         self.provider_config = self.full_config.get(self.provider, {})
-        print(self.provider_config)
         self.model_name = self.provider_config.get("model_id")
         self.model = self._load_model()
         logger.info(f"[EmbedModel] Initialized → Provider: {self.provider}, Model: {self.model_name}")

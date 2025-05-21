@@ -195,11 +195,6 @@ class Llama3LLM:
             print(f"[ERROR] LLaMA 3 API Call failed: {e}")
             return None
 
-
-import json
-
-import json
-
 class DeepSeekLLM:
     def __init__(self, bedrock_client, model_id, temperature=0.5, max_tokens=512, top_p=0.9):
         self.bedrock = bedrock_client
@@ -248,10 +243,6 @@ class DeepSeekLLM:
             return None
 
 
-
-import openai
-
-import openai
 
 class OpenAILLM:
     def __init__(self, model_id, api_key, temperature=0.7, max_tokens=2048):

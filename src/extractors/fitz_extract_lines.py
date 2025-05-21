@@ -61,14 +61,15 @@ class FitzExtractorLine(BaseExtractor):
 
             tables = page.find_tables()
             table_data = []
-            for tid, table in enumerate(tables):
+            for table in tables:
                 table_info = {
-                    "tid": tid + 1,
+                    "tid": global_tid, 
                     "bbox": list(table.bbox),
                     "row_count": table.row_count,
                     "col_count": table.col_count,
                 }
                 table_data.append(table_info)
+                global_tid += 1
 
             page_data["tables"] = table_data
 
@@ -107,7 +108,8 @@ class FitzExtractorLine(BaseExtractor):
                 if closest_line and min_distance <= self.WIDGET_LINE_DISTANCE_THRESHOLD:
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
-                        "CHECKBOX_FIELD" if field_type_str == "button" else
+                        "CHOICE_FIELD" if field_type_str == "choice" else
+                        "BUTTON_FIELD" if field_type_str == "button" else
                         "BLANK_FIELD"
                     )
                     lines[closest_line].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 9999))
@@ -120,7 +122,8 @@ class FitzExtractorLine(BaseExtractor):
                         lines[new_line_key] = []
                     field_tag = (
                         "TABLE_CELL_FIELD" if assigned_table else
-                        "CHECKBOX_FIELD" if field_type_str == "button" else
+                        "CHOICE_FIELD" if field_type_str == "choice" else
+                        "BUTTON_FIELD" if field_type_str == "button" else
                         "BLANK_FIELD"
                     )
                     lines[new_line_key].append((f"[{field_tag}:{fid}]", (rect.x0, rect.y0, rect.x1, rect.y1), 0))
@@ -173,7 +176,6 @@ class FitzExtractorLine(BaseExtractor):
                     "tid": global_tid,
                     "page": page_num
                 })
-                global_tid += 1
                 page_pid += 1
 
             start_fid, end_fid = (min(page_fids), max(page_fids)) if page_fids else (-1, -1)
@@ -186,6 +188,8 @@ class FitzExtractorLine(BaseExtractor):
                 "start_gid": start_gid,
                 "end_gid": end_gid
             }
+
+            elements.sort(key=lambda el: (el["bbox"]["bottom"], el["bbox"]["right"]))
 
             page_data["text_elements"] = processed_lines
             page_data["form_fields"] = elements

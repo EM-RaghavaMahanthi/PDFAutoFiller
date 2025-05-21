@@ -9,9 +9,7 @@ from src.utils.timing import timing_decorator
 
 class EmbedMapper:
     def __init__(self, config: dict, chunking_section: dict):
-        print(config, chunking_section)
         self.config = config
-
         embedding_config = config.get("embedder", {})
         self.embed_model = EmbedModelSelector(embedding_config)
         

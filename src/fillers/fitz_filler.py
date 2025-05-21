@@ -1,7 +1,7 @@
 import os
 import json
 import shutil
-import fitz 
+import fitz
 from src.utils.logger import logger
 from src.utils.storage import save_file
 
@@ -11,7 +11,6 @@ class FitzFiller:
         self.config = config
 
     def load_data(self, extracted_path, mapping_path):
-        """Load extracted data and final mappings."""
         with open(extracted_path, "r", encoding="utf-8") as f:
             extracted_data = json.load(f)
         with open(mapping_path, "r", encoding="utf-8") as f:
@@ -19,14 +18,12 @@ class FitzFiller:
         return extracted_data, final_mappings
 
     def create_output_path(self, pdf_path, output_dir="data/output"):
-        """Create dynamic output path."""
         os.makedirs(output_dir, exist_ok=True)
         pdf_name = os.path.basename(pdf_path)
         output_pdf_path = os.path.join(output_dir, f"filled_{pdf_name}")
         return output_pdf_path
 
     def build_fid_bbox_map(self, extracted_data):
-        """Create map of fid → (bbox, type, page_num) from extracted data."""
         fid_bbox_map = {}
         for page in extracted_data["pages"]:
             for field in page["form_fields"]:
@@ -36,9 +33,42 @@ class FitzFiller:
                 fid_bbox_map[fid] = (bbox, field_type, page["page_number"] - 1)
         return fid_bbox_map
 
-    def fill_pdf(self, pdf_path, extracted_path, mapping_path, storage_config: dict):
+    def fill_text_field(self, page, rect, value, fid):
+        try:
+            page.insert_textbox(rect, str(value), fontsize=self.fontsize, color=(1, 0, 0))
+            return True
+        except Exception as e:
+            logger.warning(f"Could not fill text field fid {fid}: {e}")
+            return False
 
-        """Main function to fill PDF and return stats."""
+    def fill_button_or_choice_field(self, doc, field_type, fid, value, bbox, page_num):
+        page = doc[page_num]
+        target_bbox = tuple(int(bbox[k]) for k in ["left", "top", "right", "bottom"])
+
+        for widget in page.widgets():
+            w_bbox = widget.rect
+            widget_bbox = (int(w_bbox.x0), int(w_bbox.y0), int(w_bbox.x1), int(w_bbox.y1))
+
+            if widget_bbox == target_bbox:
+                try:
+                    state = str(value).strip().lower()
+                    if state in ["yes"]:
+                        if field_type == "button":
+                            widget.field_value = "On"
+                        elif field_type == "choice":
+                            widget.field_value = 1 
+                        widget.update()
+                    return True
+                except Exception as e:
+                    logger.warning(f"Could not update widget for fid {fid}: {e}")
+                    return False
+
+        logger.warning(f"No widget matched bbox for fid {fid} on page {page_num + 1}")
+        return False
+
+
+
+    def fill_pdf(self, pdf_path, extracted_path, mapping_path, storage_config: dict):
         logger.info(f"Starting PDF Filling for: {pdf_path}")
 
         extracted_data, final_mappings = self.load_data(extracted_path, mapping_path)
@@ -55,15 +85,12 @@ class FitzFiller:
         fillable_fields = 0
         filled_fields = 0
 
-        
         for fid, (key, value, confidence) in final_mappings.items():
             if key is None:
-                continue  # No semantic mapping, ignore
-
+                continue
             total_fields += 1
-
             if value is None or value == "":
-                continue  # Missing value
+                continue
 
             bbox_info = fid_bbox_map.get(fid)
             if not bbox_info:
@@ -71,20 +98,20 @@ class FitzFiller:
                 continue
 
             bbox, field_type, page_num = bbox_info
-
-            # Only fill text fields (skip checkbox)
-            if field_type not in ["text"]:
-                continue
-
             rect = fitz.Rect(bbox["left"], bbox["top"], bbox["right"], bbox["bottom"])
             page = doc[page_num]
 
-            try:
-                page.insert_textbox(rect, str(value), fontsize=self.fontsize, color=(1, 0, 0))
+            success = False
+            if field_type == "text":
+                success = self.fill_text_field(page, rect, value, fid)
+            elif field_type in ["button", "choice"]:
+                if self.fill_button_or_choice_field(doc, field_type, fid, value, bbox, page_num):
+                    filled_fields += 1
+                    fillable_fields += 1
+
+            if success:
                 filled_fields += 1
                 fillable_fields += 1
-            except Exception as e:
-                logger.warning(f"Could not fill fid {fid}: {e}")
 
         doc.saveIncr()
         save_file(output_pdf_path, storage_config, key_name="output_file")
