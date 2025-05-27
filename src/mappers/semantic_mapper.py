@@ -9,6 +9,7 @@ from src.utils.timing import timing_decorator
 import time
 from src.chunkers import get_chunker
 from src.utils.storage import save_json
+from src.utils.embed_pdf_with_mapped_keys import update_pdf_with_mapped_keys
 
 
 class SemanticMapper:
@@ -17,6 +18,8 @@ class SemanticMapper:
         # Initialize LLM
         llm_name = method_config.get("llm", "claude")  # lowercase 'llm' to match YAML
         self.llm = LLMSelector(provider=llm_name).llm
+
+        self.confidence_threshold = method_config.get("confidence_threshold", "0.7")
 
         self.include_key_variants = method_config.get("include_key_variants", 0)
         self.include_field_name_variants = method_config.get("include_field_name_variants", 0)
@@ -153,13 +156,85 @@ class SemanticMapper:
     {context_text}
     -----
     Each field tag is marked using one of the following formats:
-    - [FIELD:{{fid}}]
-    - [BLANK_FIELD:{{fid}}]
+    - [TEXT_FIELD:{{fid}}]
     - [TABLE_CELL_FIELD:{{fid}}]
     - [CHECKBOX_FIELD:{{fid}}]
+    - [RADIOBUTTON_FIELD:{{fid}}]
 
     Each fid is a numeric field ID like 11, 12, 24, etc.
     """
+        
+
+        text_field_section = """
+---
+BLANK Fields:
+These fields are represented as `[TEXT_FIELD:{fid}]` or `[TABLE_CELL_FIELD:{fid}]`.
+
+- These are open-ended fields where a user needs to write something.
+- You must analyze the surrounding context (prefix/suffix text, labels) to understand what is being asked.
+- For `[TABLE_CELL_FIELD:{fid}]`, it may belong to a structured table. Consider the column name and any nearby header to infer the meaning.
+
+Guidelines:
+- Identify the most appropriate key from the input list that semantically represents the intent of the label around the field.
+- Use line-level context and avoid guessing.
+- Match based on semantic meaning, not just string similarity.
+"""
+
+        checkbox_field_section = """
+---
+CHOICE Fields:
+These fields are represented as `[CHECKBOX_FIELD:{fid}]`.
+
+- They represent dropdowns or selection lists.
+- You must decide what kind of information is being selected here based on the label or line around it.
+
+Additional Tips:
+- Keys containing substrings like `check`, `dropdown`, `list`, `type`, `option`, or `selection` are usually better matches for CHOICE fields.
+- These fields often appear **together in groups**, such as a series of related dropdowns on the same line or in a table.
+- Such groupings may occur **recursively** or across lines, so keep that in mind when interpreting the context.
+
+Guidelines:
+- Match to input keys that imply a **selection**.
+- Avoid guessing; prioritize semantic meaning based on visible label.
+- Example: A label like "Select Investor Type" should match to a key like `investorType`.
+"""
+
+        radio_button_field_section = """
+---
+BUTTON Fields:
+These fields are represented as `[RADIOBUTTON_FIELD:{fid}]`.
+
+- These are checkboxes, toggle buttons, or yes/no fields.
+- They typically represent binary decisions or confirmations.
+
+Additional Tips:
+- Fields with surrounding text containing words like `check`, `box`, `confirm`, `agree`, or `yes` are often buttons.
+- These fields often appear **in groups** (e.g., a list of terms to agree or options to select), and this grouping may be **recursive** across lines or within table rows.
+- Use this grouping behavior to guide how multiple buttons should be semantically mapped.
+
+Guidelines:
+- Match to input keys that expect a **yes/no** or **true/false** answer.
+- Example keys: `isEntityConfirmed`, `hasAgreed`, `checkbox1`, etc.
+- Only match if the label clearly implies a binary action or choice.
+"""
+
+
+        table_cell_field_section = """
+---
+TABLE CELL Fields:
+These fields are part of a structured table and represented as `[TABLE_CELL_FIELD:{fid}]`.
+
+- Each cell belongs to a row-column matrix.
+- Contextual meaning is derived from the column header, nearby rows, and any title or label above the table.
+
+Guidelines:
+- Identify which **column** and **row context** the field belongs to.
+- Use the field's row positioning and the text above the table to decide what kind of data is being filled.
+- Not every cell in the table needs to be filled.
+- Match each field to the most semantically appropriate key, based on what that column represents in the table.
+"""
+
+
 
         input_keys_section = self.build_input_key_section(input_keys, key_variants)
 
@@ -273,6 +348,10 @@ class SemanticMapper:
             instructions_header,
             pdf_context_section,
             input_keys_section,
+            text_field_section,
+            checkbox_field_section,
+            radio_button_field_section,
+            table_cell_field_section,
             fid_range_info,
             task_description,
             formatting_rules,
@@ -287,9 +366,10 @@ class SemanticMapper:
 
 
     @timing_decorator
-    def process_and_save(self, extracted_path, input_json_path, storage_config: dict, 
+    def process_and_save(self, extracted_path, input_json_path,  
+                        original_pdf_path, storage_config: dict, 
                         input_key_json_variants_path: str = None,
-                        field_names_json_variants_path: str = None, 
+                        field_names_json_variants_path: str = None,
                         output_dir="data/temp/"):
 
         mapping_path = storage_config.get("output_path")
@@ -349,6 +429,7 @@ class SemanticMapper:
                             logger.warning(f"Invalid fid in field_name_variants: {fid_str}")
 
                 prompt = self.prepare_prompt(context_text, keys_only, start_fid, end_fid, input_variants, field_name_variants_fids)
+                logger.info(prompt)
                 input_tokens = len(self.tokenizer.encode(prompt))
 
                 response = self.llm.complete(prompt)
@@ -378,6 +459,19 @@ class SemanticMapper:
                 logger.info(f"{chunk_key}: Chunk processed in {(time.time() - chunk_start):.2f} seconds.")
 
         save_json(final_flat_mapping, storage_config)
+
+        dirname = os.path.dirname(original_pdf_path)
+        basename = os.path.basename(original_pdf_path)
+        embed_pdf_path = os.path.join(dirname, f"embedded_{basename}")
+
+        update_pdf_with_mapped_keys(
+            pdf_path=original_pdf_path,
+            final_flat_mapping=final_flat_mapping,
+            extracted_data=extracted_data,
+            embed_pdf_path=embed_pdf_path,
+            storage_config=storage_config,
+            confidence_threshold=self.confidence_threshold 
+         )
 
         logger.info(f"Saved raw LLM responses to: {debug_path}")
         logger.info(f"Saved cleaned (deduplicated) field mappings to: {mapping_path}")

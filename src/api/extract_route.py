@@ -4,6 +4,7 @@ from src.models.request_models import ExtractRequest
 from src.extractors import get_extractor_by_name
 from src.utils.logger import logger
 from src.utils.storage import download_to_tempfile, cleanup_temp_file
+from src.utils.render_jinja_config import render_jinja_config
 import os
 import yaml
 
@@ -16,8 +17,7 @@ def extract_pdf(request: ExtractRequest):
     if not os.path.exists(config_path):
         return {"message": f"Config file not found at {config_path}"}
 
-    with open(config_path, "r") as f:
-        pipeline_config = yaml.safe_load(f)
+    pipeline_config = render_jinja_config(config_path, {}) 
 
     extractor_config = pipeline_config.get("extractor", {})
 

@@ -4,6 +4,7 @@ from src.models.request_models import MapFieldsRequest
 from src.utils.logger import logger
 from src.utils.storage import download_to_tempfile, cleanup_temp_file
 from src.mappers import get_mapper_by_name
+from src.utils.render_jinja_config import render_jinja_config
 import yaml
 import os
 
@@ -18,12 +19,10 @@ def map_fields(request: MapFieldsRequest):
     if not os.path.exists(config_path):
         return {"message": f"Config file not found at {config_path}"}
 
-    with open(config_path, "r") as f:
-        pipeline_config = yaml.safe_load(f)
+    pipeline_config = render_jinja_config(config_path, {}) 
 
     mapper_block = pipeline_config.get("mapper", {})
 
-    # Get method and config
     method_section = mapper_block.get("method", {})
     current_method = method_section.get("current_method", "semantic")
     method_config = next((m for m in method_section.get("methods", []) if m.get("name") == current_method), {})
@@ -48,6 +47,7 @@ def map_fields(request: MapFieldsRequest):
     logger.info(f"Chunking strategy selected: {current_strategy}")
 
     # Download extracted and input JSON files
+    temp_input_pdf_path = download_to_tempfile(storage_config, key_name="input_pdf_path", suffix=".pdf")
     temp_extracted_path = download_to_tempfile(storage_config, key_name="extracted_key", suffix=".json")
     temp_input_json_path = download_to_tempfile(storage_config, key_name="input_json_path", suffix=".json")
     temp_key_variants_path = download_to_tempfile(storage_config, key_name="input_key_json_variants_path", suffix=".json")
@@ -59,6 +59,7 @@ def map_fields(request: MapFieldsRequest):
         mapping_path = mapper.process_and_save(
             temp_extracted_path,
             temp_input_json_path,
+            temp_input_pdf_path,
             storage_config,
             temp_key_variants_path,
             field_names_variants_path
@@ -66,6 +67,7 @@ def map_fields(request: MapFieldsRequest):
     finally:
         cleanup_temp_file(temp_extracted_path, delete=False)
         cleanup_temp_file(temp_input_json_path, delete=False)
+        cleanup_temp_file(temp_input_pdf_path, delete=False)
 
     return {
         "message": "Field mapping completed",

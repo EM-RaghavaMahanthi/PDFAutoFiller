@@ -4,6 +4,7 @@ from src.models.request_models import FillRequest
 from src.utils.logger import logger
 from src.utils.storage import download_to_tempfile, cleanup_temp_file
 from src.fillers import get_filler_by_name
+from src.utils.render_jinja_config import render_jinja_config
 import yaml
 import os
 
@@ -16,8 +17,7 @@ def fill_pdf(request: FillRequest):
     if not os.path.exists(config_path):
         return {"message": f"Config file not found at {config_path}"}
 
-    with open(config_path, "r") as f:
-        pipeline_config = yaml.safe_load(f)
+    pipeline_config = render_jinja_config(config_path, {})    
 
     # --- Method Section ---
     filler_block = pipeline_config.get("filler", {})
@@ -39,11 +39,12 @@ def fill_pdf(request: FillRequest):
     temp_pdf_path = download_to_tempfile(storage_config, key_name="pdf_path", suffix=".pdf")
     temp_extracted_path = download_to_tempfile(storage_config, key_name="extracted_path", suffix=".json")
     temp_mapping_path = download_to_tempfile(storage_config, key_name="mapping_path", suffix=".json")
+    temp_input_json_path = download_to_tempfile(storage_config, key_name="input_json_path", suffix=".json")
 
     try:
-        method_config["storage"] = storage_config  # Pass storage for output handling
+        method_config["storage"] = storage_config  
         filler = get_filler_by_name(current_method, method_config)
-        result = filler.fill_pdf(temp_pdf_path, temp_extracted_path, temp_mapping_path, storage_config)
+        result = filler.fill_pdf(temp_pdf_path, temp_input_json_path, temp_extracted_path, temp_mapping_path, storage_config)
     finally:
         cleanup_temp_file(temp_pdf_path, delete=False)
         cleanup_temp_file(temp_extracted_path, delete=False)
@@ -51,12 +52,12 @@ def fill_pdf(request: FillRequest):
 
     return {
         "message": "PDF Filling Completed",
-        "output_pdf": result["output_pdf"],
-        "total_form_fields": result["total_form_fields"],
-        "total_mapped_fields": result["total_fields"],
-        "filled_fields": result["filled_fields"],
-        "missing_value_count": result["missing_value_count"],
-        "mapped_percentage": result["mapped_percentage"],
-        "fill_percentage_mapped": result["percentage_filled"],
-        "fill_percentage_overall": result["overall_fill_percentage"]
+        "output_pdf": result["output_pdf"]
+        # "total_form_fields": result["total_form_fields"],
+        # "total_mapped_fields": result["total_fields"],
+        # "filled_fields": result["filled_fields"],
+        # "missing_value_count": result["missing_value_count"],
+        # "mapped_percentage": result["mapped_percentage"],
+        # "fill_percentage_mapped": result["percentage_filled"],
+        # "fill_percentage_overall": result["overall_fill_percentage"]
     }
