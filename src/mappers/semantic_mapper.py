@@ -16,13 +16,14 @@ class SemanticMapper:
     def __init__(self, method_config: dict, chunking_section: dict):
 
         # Initialize LLM
-        llm_name = method_config.get("llm", "claude")  # lowercase 'llm' to match YAML
+        llm_name = method_config.get("llm", "claude")  
         self.llm = LLMSelector(provider=llm_name).llm
 
         self.confidence_threshold = method_config.get("confidence_threshold", "0.7")
 
         self.include_key_variants = method_config.get("include_key_variants", 0)
         self.include_field_name_variants = method_config.get("include_field_name_variants", 0)
+        self.included_description = method_config.get("included_description", 0)
 
         # Initialize tokenizer
         self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -41,18 +42,47 @@ class SemanticMapper:
         """Only keep list of keys, ignore values."""
         return list(input_data.keys())
     
+    def prepare_updated_input_data_with_description(self, input_data) -> dict:
+        return {
+            key: [info["description"]] 
+            for key, info in input_data.items()
+            if "description" in info
+        }
+    
+    def flatten_enriched_data(self, enriched: dict) -> dict:
+        return {
+            key: info["value"]
+            for key, info in enriched.items()
+            if isinstance(info, dict) and "value" in info
+        }
+
+    
     def build_input_key_section(self, input_keys: list, key_variants: dict = None) -> str:
         if not key_variants:
-            return f"""
-    ---
-    Input Keys:
-    You are given a flat list of semantic keys:
-    {json.dumps(input_keys, indent=2)}
+            if self.included_description == 1:
+                return f"""
+            ---
+            Input Keys:
+            You are given a dictionary where each key maps to a list containing its description:
+            {json.dumps(input_keys, indent=2)}
 
-    - These are the only allowed key labels.
-    - Do not invent, reword, interpret, or create new labels.
-    - Only return exact matches from this list in your output's "key" field.
-    """
+            - These keys are the only allowed labels for matching.
+            - Do not invent, reword, interpret, or create new labels.
+            - Only return exact matches from this list in your output's "key" field.
+            - Each key has a corresponding description to clarify its meaning.
+            - Make use of the description to understand the intent behind each key and guide accurate mapping, check for paranthesis for special instruction in descriptions
+            """
+            else:
+                return f"""
+            ---
+            Input Keys:
+            You are given a flat list of semantic keys:
+            {json.dumps(input_keys, indent=2)}
+
+            - These are the only allowed key labels.
+            - Do not invent, reword, interpret, or create new labels.
+            - Only return exact matches from this list in your output's "key" field.
+            """
         else:
             return f"""
     ---
@@ -163,6 +193,11 @@ class SemanticMapper:
 
     Each fid is a numeric field ID like 11, 12, 24, etc.
     """
+        
+        spacing_layout_section = """Field tags like `[BLANK_FIELD:{fid}]` are spaced based on their visual positions in the PDF — extra spaces are added according to gaps between elements.
+        Minor spacing mismatches may still occur.Sometimes, the label (e.g., Name:) and its blank may not be on the same line — the blank could be above, below, or offset.
+        There may also be multiple blanks on the same line or under labels.
+        Use both horizontal and vertical alignment to infer mappings accurately. Don't assume blanks are always side-by-side with labels."""
         
 
         text_field_section = """
@@ -348,6 +383,7 @@ Guidelines:
             instructions_header,
             pdf_context_section,
             input_keys_section,
+            spacing_layout_section,
             text_field_section,
             checkbox_field_section,
             radio_button_field_section,
@@ -397,8 +433,11 @@ Guidelines:
                 field_name_variants = json.load(fvf)
             logger.info(f"Loaded field name variants from {field_names_json_variants_path} ({len(field_name_variants)} entries)")
 
-
-        keys_only = self.prepare_updated_input_data(input_data)
+        keys_data= self.prepare_updated_input_data(input_data)
+        if self.included_description==1:
+            logger.info("Including key descriptions in the prompt.")
+            keys_data= self.prepare_updated_input_data_with_description(input_data)
+            input_data= self.flatten_enriched_data(input_data)
         context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
         final_output = {}
         final_flat_mapping = {}
@@ -428,7 +467,7 @@ Guidelines:
                         except ValueError:
                             logger.warning(f"Invalid fid in field_name_variants: {fid_str}")
 
-                prompt = self.prepare_prompt(context_text, keys_only, start_fid, end_fid, input_variants, field_name_variants_fids)
+                prompt = self.prepare_prompt(context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids)
                 logger.info(prompt)
                 input_tokens = len(self.tokenizer.encode(prompt))
 

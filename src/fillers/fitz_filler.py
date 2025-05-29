@@ -68,7 +68,7 @@ class FitzFiller:
 
 
 
-    def fill_pdf(self, pdf_path, extracted_path, mapping_path, storage_config: dict):
+    def fill_pdf(self, pdf_path, input_json_path, extracted_path, mapping_path, storage_config: dict):
         logger.info(f"Starting PDF Filling for: {pdf_path}")
 
         extracted_data, final_mappings = self.load_data(extracted_path, mapping_path)
