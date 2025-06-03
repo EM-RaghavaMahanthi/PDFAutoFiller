@@ -11,3 +11,7 @@ class FillRequest(BaseModel):
 
 class ValidateRequest(BaseModel):
     config_path: str
+
+
+class OpenFileRequest(BaseModel):
+    config_path: str    

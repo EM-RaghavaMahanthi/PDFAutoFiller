@@ -23,7 +23,7 @@ class SemanticMapper:
 
         self.include_key_variants = method_config.get("include_key_variants", 0)
         self.include_field_name_variants = method_config.get("include_field_name_variants", 0)
-        self.included_description = method_config.get("included_description", 0)
+        self.include_description = method_config.get("include_description", 0)
 
         # Initialize tokenizer
         self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -59,7 +59,7 @@ class SemanticMapper:
     
     def build_input_key_section(self, input_keys: list, key_variants: dict = None) -> str:
         if not key_variants:
-            if self.included_description == 1:
+            if self.include_description == 1:
                 return f"""
             ---
             Input Keys:
@@ -398,7 +398,44 @@ Guidelines:
             output_format,
             closing_note
         ])
+    
+    def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
+        prompt = f"""
+    You are a helpful assistant. Given a list of JSON keys from a form or document input, generate a human-readable description for each key that clearly explains what the field represents.
 
+    If the meaning of any key is unclear or ambiguous, return "undefined" for that key.
+
+    Strictly return the output as a valid JSON object in the format:
+    {{ "key": "description", ... }}
+
+    Try adding better description not just paraphrasing, whos or who are important
+
+    Also retain the numbering in ther say BOwnerCorporationFulllegalname4_ID, it is fourth BOwner...
+
+    Also whenever you find Inception date, tell that it is not data of birth very clearly. 
+
+    Do not include any extra commentary, markdown, or explanation — only valid JSON.
+
+    Keys: {keys}
+
+    Output:
+    """
+        raw_response = llm.complete(prompt)
+        cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.text.strip(), flags=re.MULTILINE)
+        parsed = json.loads(cleaned_json)
+        return parsed
+    
+    def enrich_input_data_llm(self, flat_json: dict, llm) -> dict:
+        keys = list(flat_json.keys())
+        descriptions = self.generate_key_descriptions_bulk(keys, llm)
+
+        enriched = {}
+        for key, value in flat_json.items():
+            enriched[key] = {
+                "value": value,
+                "description": descriptions.get(key, "undefined")
+            }
+        return enriched
 
 
     @timing_decorator
@@ -434,10 +471,10 @@ Guidelines:
             logger.info(f"Loaded field name variants from {field_names_json_variants_path} ({len(field_name_variants)} entries)")
 
         keys_data= self.prepare_updated_input_data(input_data)
-        if self.included_description==1:
-            logger.info("Including key descriptions in the prompt.")
-            keys_data= self.prepare_updated_input_data_with_description(input_data)
-            input_data= self.flatten_enriched_data(input_data)
+        if self.include_description==1:
+            logger.info("Preparing & Including key descriptions in the prompt.")
+            enriched_data = self.enrich_input_data_llm(input_data, llm=self.llm)
+            keys_data = self.prepare_updated_input_data_with_description(enriched_data)
         context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
         final_output = {}
         final_flat_mapping = {}

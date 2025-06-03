@@ -10,6 +10,14 @@ class FitzEmbedFiller:
         self.fontsize = config.get("fontsize", 6)
         self.config = config
 
+    def _get_field_type(self, widget):
+        base = widget.field_type_string.upper()
+        if base == "CHOICE":
+            return "COMBOBOX" if (widget.field_flags & 0x80) else "LISTBOX"
+        if base == "BUTTON":
+            return "RADIOBUTTON" if (widget.field_flags & 0x100) else "CHECKBOX"
+        return base 
+
     def fill_text_field(self, page, rect, value, fid):
         try:
             page.insert_textbox(rect, str(value), fontsize=self.fontsize, color=(1, 0, 0))
@@ -18,30 +26,48 @@ class FitzEmbedFiller:
             logger.warning(f"Could not fill text field fid {fid}: {e}")
             return False
 
-    def fill_button_or_choice_field(self, widget, value, key, field_type):
+    def fill_checkbox(self, widget, value):
         try:
-            state = str(value).strip().lower()
-            if state in ["yes", "on", "true", "1"]:
-                if field_type == 5:  
-                    widget.field_value = "On"
-                elif field_type == 2:  
-                    widget.field_value = 1
-                widget.update()
-                return True
-            return False
+            if str(value).strip().lower() in ["yes", "on", "true", "1"]:
+                widget.field_value = "On"
+            else:
+                widget.field_value = "Off"
+            widget.update()
+            return True
         except Exception as e:
-            print(f"Could not update widget for key={key}: {e}")
+            logger.warning(f"Could not fill checkbox: {e}")
             return False
 
-    def fill_pdf(self, pdf_path, input_json_path, extracted_path, mapping_path, storage_config: dict):
+    def fill_radiobutton(self, widget):
+        try:
+            widget.field_value = "Off"
+            widget.update()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not fill radiobutton: {e}")
+            return False
+
+    def fill_choice_field(self, widget, value, field_type):
+        try:
+            if field_type == "LISTBOX" or field_type == "COMBOBOX":
+                if value in widget.choice_values:
+                    widget.field_value = value
+                    widget.update()
+                    return True
+                else:
+                    logger.warning(f"Value '{value}' not in choices for field {widget.field_name}")
+            return False
+        except Exception as e:
+            logger.warning(f"Could not fill choice field: {e}")
+            return False
+
+    def fill_pdf(self, pdf_path, embed_pdf_path, input_json_path, extracted_path, mapping_path, storage_config: dict):
         with open(input_json_path, "r", encoding="utf-8") as f:
             input_data = json.load(f)
 
         output_pdf_path = os.path.join("/tmp", os.path.basename(storage_config.get("output_file", "filled_output.pdf")))
-        shutil.copy(pdf_path, output_pdf_path)
-        doc = fitz.open(output_pdf_path)
-
-        doc = fitz.open(pdf_path)
+        shutil.copy(embed_pdf_path, output_pdf_path)
+        doc = fitz.open(embed_pdf_path)
 
         total_widgets = 0
         filled_count = 0
@@ -49,13 +75,13 @@ class FitzEmbedFiller:
         for page_num, page in enumerate(doc, start=1):
             for widget in page.widgets():
                 total_widgets += 1
-                key = widget.field_name
-                print(key)
-                if not key:
-                    continue
-                key = key.split(".")[-1]
 
-                if key=="unmapped":
+                raw_key = widget.field_name
+                if not raw_key:
+                    continue
+
+                key = raw_key.split(".")[-1]  
+                if key.lower().startswith("unmapped"):
                     continue
 
                 if key not in input_data:
@@ -65,28 +91,32 @@ class FitzEmbedFiller:
                 if not value:
                     continue
 
-                try:
-                    rect = widget.rect
-                    field_type_str = {
-                        5: "button",
-                        7: "text",
-                        2: "choice",
-                        4: "signature"
-                    }.get(widget.field_type, "unknown")
+                rect = widget.rect
+                field_type = self._get_field_type(widget)
 
-                    if field_type_str == "text":
-                        print(key,value )
-                        if self.fill_text_field(page, rect, value, key):
-                            filled_count += 1
-                    elif field_type_str in ["button", "choice"]:
-                        if self.fill_button_or_choice_field(widget, value, key, widget.field_type):
-                            filled_count += 1
-                except Exception as e:
-                    print(f"Failed to fill key={key} on page {page_num}: {e}")
+                if field_type == "TEXT":
+                    if self.fill_text_field(page, rect, value, key):
+                        filled_count += 1
 
+                elif field_type == "CHECKBOX":
+                    if self.fill_checkbox(widget, value):
+                        filled_count += 1
+
+                elif field_type == "RADIOBUTTON":
+                    if self.fill_radiobutton(widget):
+                        filled_count += 1
+
+                elif field_type in ["LISTBOX", "COMBOBOX"]:
+                    if self.fill_choice_field(widget, value, field_type):
+                        filled_count += 1
+
+                else:
+                    logger.warning(f"Unsupported widget type '{field_type}' for key: {key}")
+
+
+        doc.save(output_pdf_path)
         save_file(output_pdf_path, storage_config, key_name="output_file")
-        print(f"Filled PDF saved to: {output_pdf_path}")
-        print(f"Filled {filled_count} out of {total_widgets} widgets.")
+        logger.info(f"[✓] Filled {filled_count} out of {total_widgets} widgets. Saved: {output_pdf_path}")
         return {
             "output_pdf": output_pdf_path
         }

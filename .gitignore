@@ -29,6 +29,7 @@ main.py
 config.yaml
 input_config.yaml.j2
 pipeline_config.yaml
+node_modules
 
 data/
 logs/
