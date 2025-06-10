@@ -30,6 +30,7 @@ config.yaml
 input_config.yaml.j2
 pipeline_config.yaml
 node_modules
+emc_data
 
 data/
 logs/

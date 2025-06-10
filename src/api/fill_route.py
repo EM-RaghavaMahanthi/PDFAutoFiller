@@ -5,7 +5,6 @@ from src.utils.logger import logger
 from src.utils.storage import download_to_tempfile, cleanup_temp_file
 from src.fillers import get_filler_by_name
 from src.utils.render_jinja_config import render_jinja_config
-from src.utils.file_openers import open_app
 import yaml
 import os
 
