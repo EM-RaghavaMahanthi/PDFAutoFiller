@@ -34,3 +34,15 @@ emc_data
 
 data/
 logs/
+
+# Ignore everything in java_utilsAdd commentMore actions
+/src/java_utils/*
+
+# Allow pom and java source
+!/src/java_utils/pom.xml
+!/src/java_utils/src/
+!/src/java_utils/src/main/
+!/src/java_utils/src/main/java/
+!/src/java_utils/src/main/java/com/
+!/src/java_utils/src/main/java/com/emc/
+!/src/java_utils/src/main/java/com/emc/FormFieldRebuilder.java

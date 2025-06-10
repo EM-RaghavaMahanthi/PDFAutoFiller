@@ -13,6 +13,8 @@ class FitzExtractorLine(BaseExtractor):
         self.rounding = config.get("rounding", 1)
         self.global_id = 1
         self.global_fid = 1
+        self.AVG_CHAR_WIDTH = 7
+        self.LEFT_MARGIN = 70
         self.fid_to_gid_map = {}
 
     def _get_field_type_new(self, widget):
@@ -91,9 +93,8 @@ class FitzExtractorLine(BaseExtractor):
         if assigned_table:
             field_tag = "TABLE_CELL_FIELD"
 
-        AVG_CHAR_WIDTH = 7
         field_text = f"[{field_tag}:{fid}]"
-        synthetic_width = len(field_text) * AVG_CHAR_WIDTH
+        synthetic_width = len(field_text) * self.AVG_CHAR_WIDTH
         x0 = rect.x0
         x1 = x0 + synthetic_width
         lines[line_key].append((field_text, (x0, rect.y0, x1, rect.y1), 9999))
@@ -121,8 +122,7 @@ class FitzExtractorLine(BaseExtractor):
 
     def _process_lines(self, lines, line_map, page_num, global_tid):
         processed = []
-        AVG_CHAR_WIDTH = 7  
-        LEFT_MARGIN_X = 70
+        
         for page_pid, line_key in enumerate(sorted(lines.keys()), start=1):
             words = sorted(lines[line_key], key=lambda w: w[1][0])
             if not words:
@@ -134,12 +134,12 @@ class FitzExtractorLine(BaseExtractor):
             for i, (word, (x0, y0, x1, y1), _) in enumerate(words):
           
                 if i == 0:
-                    gap = max(0, x0 - LEFT_MARGIN_X)
-                    space_count = int(gap / AVG_CHAR_WIDTH)
+                    gap = max(0, x0 - self.LEFT_MARGIN)
+                    space_count = int(gap / self.AVG_CHAR_WIDTH)
                     full_text += " " * space_count
                 else:
                     gap = max(0, x0 - previous_x1)
-                    space_count = int(gap / AVG_CHAR_WIDTH)
+                    space_count = int(gap / self.AVG_CHAR_WIDTH)
                     full_text += " " * max(1, space_count)
 
                 full_text += word

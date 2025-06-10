@@ -505,7 +505,7 @@ Guidelines:
                             logger.warning(f"Invalid fid in field_name_variants: {fid_str}")
 
                 prompt = self.prepare_prompt(context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids)
-                logger.info(prompt)
+                #logger.info(prompt)
                 input_tokens = len(self.tokenizer.encode(prompt))
 
                 response = self.llm.complete(prompt)
@@ -540,14 +540,16 @@ Guidelines:
         basename = os.path.basename(original_pdf_path)
         embed_pdf_path = os.path.join(dirname, f"embedded_{basename}")
 
-        update_pdf_with_mapped_keys(
-            pdf_path=original_pdf_path,
-            final_flat_mapping=final_flat_mapping,
-            extracted_data=extracted_data,
-            embed_pdf_path=embed_pdf_path,
-            storage_config=storage_config,
-            confidence_threshold=self.confidence_threshold 
-         )
+        # update_pdf_with_mapped_keys(
+        #     pdf_path=original_pdf_path,
+        #     final_flat_mapping=final_flat_mapping,
+        #     extracted_data=extracted_data,
+        #     embed_pdf_path=embed_pdf_path,
+        #     storage_config=storage_config,
+        #     confidence_threshold=self.confidence_threshold 
+        #  )
+
+        
 
         logger.info(f"Saved raw LLM responses to: {debug_path}")
         logger.info(f"Saved cleaned (deduplicated) field mappings to: {mapping_path}")
