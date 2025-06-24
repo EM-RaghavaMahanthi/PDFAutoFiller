@@ -2,11 +2,11 @@
 FROM python:3.13-slim
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV FLASK_APP src/flaskapis/app.py
-ENV FLASK_RUN_PORT 5050
-ENV FLASK_ENV development
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=src/flaskapis/app.py
+ENV FLASK_RUN_PORT=5050
+ENV FLASK_ENV=development
 
 # Create app directory
 WORKDIR /app

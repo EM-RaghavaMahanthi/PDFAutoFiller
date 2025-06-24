@@ -5,7 +5,6 @@ from src.utils.stream_status import stream_status
 
 app = Flask(__name__)
 
-# 🔥 This enables CORS for all domains and methods
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
 
 app.register_blueprint(pipeline_bp)

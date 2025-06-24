@@ -9,7 +9,8 @@ export default defineConfig({
       // Flask endpoints
       '/start': 'http://localhost:5050',
       '/stream': 'http://localhost:5050',
-      '/download': 'http://localhost:5050'
+      '/download/': 'http://localhost:5050',
+      '/validate/': 'http://localhost:5050'
     }
   }
 })

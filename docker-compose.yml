@@ -9,6 +9,8 @@ services:
       - ./data:/app/data
     ports:
       - "5050:5050"
+    env_file:
+      - .env
 
   frontend:
     build:

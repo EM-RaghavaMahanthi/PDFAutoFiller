@@ -86,7 +86,6 @@ public class FormFieldRebuilder {
             }
         }
     
-        System.out.println("✅ Loaded and normalized fid metadata for iText comparison.");
         return result;
     }
     
@@ -181,7 +180,7 @@ public class FormFieldRebuilder {
     
         stamper.close();
         reader.close();
-        System.out.println("✅ All form fields and widgets removed.");
+        //System.out.println("✅ All form fields and widgets removed.");
     }
 
     public static void addFields(String inputPdf, String outputPdf, List<FieldMeta> fields) throws Exception {
@@ -203,7 +202,7 @@ public class FormFieldRebuilder {
         stamper.setFormFlattening(false);
         stamper.close();
         reader.close();
-        System.out.println("🎯 All fields added and desynced using groupName + fid logic.");
+        //System.out.println("🎯 All fields added and desynced using groupName + fid logic.");
     }
     
     private static Map<FieldMeta, String> assignFieldNames(List<FieldMeta> fields) {
@@ -265,13 +264,13 @@ public class FormFieldRebuilder {
                 radioField.put(PdfName.AS, PdfName.Off);
                 radioGroup.addKid(radioField);
     
-                System.out.println("🔘 Added radio option '" + meta.exportValue + "' for group: " + name);
+                //System.out.println("🔘 Added radio option '" + meta.exportValue + "' for group: " + name);
             }
     
             radioGroup.put(PdfName.V, PdfName.Off);
             radioGroup.put(PdfName.AS, PdfName.Off);
             stamper.addAnnotation(radioGroup, group.get(0).page);
-            System.out.println("✅ Added radio group '" + name + "' on page " + group.get(0).page);
+            //System.out.println("✅ Added radio group '" + name + "' on page " + group.get(0).page);
         }
     }
     
@@ -283,25 +282,33 @@ public class FormFieldRebuilder {
             PdfFormField parent = PdfFormField.createTextField(writer, false, false, 100);
             parent.setFieldName(name);
 
+            // 🛑 Track seen (page, rect) to prevent duplicates
+            Set<String> seenLocations = new HashSet<>();
+
             for (FieldMeta meta : group) {
+                String key = meta.page + "|" + meta.rect.toString();
+
+                if (seenLocations.contains(key)) continue;  // Skip duplicate location
+                seenLocations.add(key);
+
                 TextField tf = new TextField(writer, meta.rect, null);
                 tf.setText(meta.value != null ? meta.value : "");
                 PdfFormField widget = tf.getTextField();
 
-                // 🔧 Fix: Explicitly place the widget on the correct page
-                widget.setPlaceInPage(meta.page);
+                widget.setPlaceInPage(meta.page);  // Ensure it's placed correctly
 
                 parent.addKid(widget);
-                System.out.println("📝 Grouped widget added for '" + name + "' on page " + meta.page);
             }
 
-            // ⚠️ Important: Add parent field to *all* pages where kids are placed
-            Set<Integer> uniquePages = group.stream().map(f -> f.page).collect(Collectors.toSet());
-            for (int page : uniquePages) {
-                stamper.addAnnotation(parent, page);
+            if (!parent.getKids().isEmpty()) {
+                // 🧠 Add only once to the first page where any child is placed
+                int firstPage = group.get(0).page;
+                stamper.addAnnotation(parent, firstPage);
             }
         }
     }
+
+
 
     
     private static void addCheckboxes(List<FieldMeta> checkboxes, Map<FieldMeta, String> assignedNames, PdfWriter writer, PdfStamper stamper) throws Exception {
@@ -314,7 +321,7 @@ public class FormFieldRebuilder {
             cb.setPlaceInPage(meta.page);
     
             stamper.addAnnotation(cb, meta.page);
-            System.out.println("☑️ Checkbox field added: " + name + " on page " + meta.page);
+            //System.out.println("☑️ Checkbox field added: " + name + " on page " + meta.page);
         }
     }
     

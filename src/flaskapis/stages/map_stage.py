@@ -26,8 +26,10 @@ def run_map_stage(job_id: str, pipeline_config: dict):
     strategy_config["name"] = current_strategy
     method_config["chunking"] = strategy_config
 
+
     log_status(job_id, f"[⚙️] Mapper method: {current_method}")
     log_status(job_id, f"[⚙️] Chunking strategy: {current_strategy}")
+    log_status(job_id, f"[⚙️] llm used: {method_config["llm"]}")
 
     try:
         mapper = get_mapper_by_name(current_method, method_config, chunking_config)
