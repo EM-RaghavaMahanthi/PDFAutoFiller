@@ -13,32 +13,43 @@ export default function App() {
   const [done, setDone] = useState(false);
 
   const handleJobStart = (id) => {
-    if (jobId === id) return;
+  if (jobId === id) return;
 
-    setJobId(id);
-    setStatusLogs(["📄 Job Started..."]);
-    setDone(false);
+  console.log("[handleJobStart] New job started:", id);
 
-    const eventSource = new EventSource(`/stream/${id}`);
+  setJobId(id);
+  setStatusLogs(["📄 Job Started..."]);
+  setDone(false);
 
-    eventSource.onmessage = (e) => {
-      const message = `✅ ${e.data}`;
-      setStatusLogs((prev) => {
-        if (prev.includes(message)) return prev;
-        return [...prev, message];
-      });
+  const eventSource = new EventSource(`/stream/${id}`);
+  console.log("[handleJobStart] EventSource opened for:", `/stream/${id}`);
 
-      if (e.data.includes("Done filling.")) {
-        setDone(true);
-        eventSource.close();
+  eventSource.onmessage = (e) => {
+    console.log("[SSE onmessage] Raw event data:", e.data);
+    const message = `✅ ${e.data}`;
+
+    setStatusLogs((prev) => {
+      if (prev.includes(message)) {
+        console.log("[SSE onmessage] Duplicate log skipped:", message);
+        return prev;
       }
-    };
+      console.log("[SSE onmessage] New log added:", message);
+      return [...prev, message];
+    });
 
-    eventSource.onerror = (err) => {
-      console.error("SSE error:", err);
+    if (e.data.includes("Done filling.")) {
+      console.log("[SSE onmessage] Final message detected, closing EventSource.");
+      setDone(true);
       eventSource.close();
-    };
+    }
   };
+
+  eventSource.onerror = (err) => {
+    console.error("[SSE onerror] SSE connection error:", err);
+    eventSource.close();
+  };
+};
+
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors">

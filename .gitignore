@@ -27,7 +27,7 @@ __pycache__/
 
 # Ignore data folder
 
-main.py
+
 config.yaml
 input_config.yaml.j2
 pipeline_config.yaml

@@ -32,7 +32,6 @@ def fitz_pdf_to_field_map(pdf_path: str) -> dict:
             field_type = get_field_type_new(widget)
             key = (page_num, bbox)
             field_map[key] = (field_name.strip(), field_type, str(field_value).strip())
-            print(key, (field_name.strip(), field_type, str(field_value).strip()))
 
     return field_map
 

@@ -73,50 +73,62 @@ class FitzEmbedFiller:
         filled_count = 0
 
         for page_num, page in enumerate(doc, start=1):
-            for widget in page.widgets():
+            widgets = page.widgets()
+            if not widgets:
+                continue
+
+            for widget in widgets:
                 total_widgets += 1
+                try:
+                    raw_key = widget.field_name
+                    if not raw_key:
+                        continue
 
-                raw_key = widget.field_name
-                if not raw_key:
-                    continue
+                    key = raw_key.split(".")[-1]
+                    if key.lower().startswith("unmapped"):
+                        continue
 
-                key = raw_key.split(".")[-1]  
-                if key.lower().startswith("unmapped"):
-                    continue
+                    if key not in input_data:
+                        continue
 
-                if key not in input_data:
-                    continue
+                    value = input_data[key]
+                    if not value:
+                        continue
 
-                value = input_data[key]
-                if not value:
-                    continue
+                    rect = widget.rect
+                    field_type = self._get_field_type(widget)
 
-                rect = widget.rect
-                field_type = self._get_field_type(widget)
+                    if field_type == "TEXT":
+                        if self.fill_text_field(page, rect, value, key):
+                            filled_count += 1
 
-                if field_type == "TEXT":
-                    if self.fill_text_field(page, rect, value, key):
-                        filled_count += 1
+                    elif field_type == "CHECKBOX":
+                        if self.fill_checkbox(widget, value):
+                            filled_count += 1
 
-                elif field_type == "CHECKBOX":
-                    if self.fill_checkbox(widget, value):
-                        filled_count += 1
+                    elif field_type == "RADIOBUTTON":
+                        if self.fill_radiobutton(widget):
+                            filled_count += 1
 
-                elif field_type == "RADIOBUTTON":
-                    if self.fill_radiobutton(widget):
-                        filled_count += 1
+                    elif field_type in ["LISTBOX", "COMBOBOX"]:
+                        if self.fill_choice_field(widget, value, field_type):
+                            filled_count += 1
 
-                elif field_type in ["LISTBOX", "COMBOBOX"]:
-                    if self.fill_choice_field(widget, value, field_type):
-                        filled_count += 1
+                    else:
+                        logger.warning(f"[Page {page_num}] Unsupported widget type '{field_type}' for key: {key}")
 
-                else:
-                    logger.warning(f"Unsupported widget type '{field_type}' for key: {key}")
+                except Exception as e:
+                    logger.warning(f"[Page {page_num}] Failed to process widget {widget.field_name}: {e}")
 
+        try:
+            doc.save(output_pdf_path)
+        except Exception as e:
+            logger.error(f"Failed to save filled PDF: {e}")
+            raise
 
-        doc.save(output_pdf_path)
         save_file(output_pdf_path, storage_config, key_name="output_file")
         logger.info(f"[✓] Filled {filled_count} out of {total_widgets} widgets. Saved: {output_pdf_path}")
+
         return {
             "output_pdf": output_pdf_path
         }
