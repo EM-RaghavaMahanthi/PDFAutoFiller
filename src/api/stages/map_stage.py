@@ -37,7 +37,7 @@ async def run_map_stage(job_id: str, pipeline_config: dict):
             extracted_path,
             input_json_path,
             input_pdf_path,
-            {"output_path": os.path.join(job_dir, "mapped.json")},
+            {"output_path": os.path.join(job_dir, "mapped.json"),"radio_groups":os.path.join(job_dir, "radio_groups.json")},
             key_variants_path,
             field_name_variants_path
         )

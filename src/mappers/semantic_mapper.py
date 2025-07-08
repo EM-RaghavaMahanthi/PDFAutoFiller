@@ -9,6 +9,7 @@ from src.utils.timing import timing_decorator
 import time
 from src.chunkers import get_chunker
 from src.utils.storage import save_json
+from src.groupers.group_by_llm import GroupByLLM
 
 import aiofiles
 
@@ -534,6 +535,7 @@ Guidelines:
                         output_dir="data/temp/"):
 
         mapping_path = storage_config.get("output_path")
+        radio_path = storage_config.get("radio_groups")
         file_stub = os.path.splitext(os.path.basename(mapping_path))[0]
         debug_path = os.path.join(output_dir, f"raw_llm_responses_{file_stub}.jsonl")
 
@@ -562,6 +564,18 @@ Guidelines:
 
         context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
         final_flat_mapping = {}
+
+        groupby_kwargs = {
+            "llm": self.llm,
+            "field_type": "RADIOBUTTON",
+            "threshold": 2,
+            "keys_data": keys_data,  # Pass your semantic keys for matching
+        }
+
+        grouper = GroupByLLM(extracted_data, **groupby_kwargs)
+        radio_groups = grouper.group()
+        with open(radio_path, "w", encoding="utf-8") as f:
+            json.dump(radio_groups, f, indent=4, ensure_ascii=False)
 
         semaphore = asyncio.Semaphore(self.max_threads)
 

@@ -7,7 +7,6 @@ import com.itextpdf.text.pdf.*;
 import java.io.FileReader;
 import java.io.FileOutputStream;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class FormFieldRebuilder {
 
@@ -113,22 +112,32 @@ public class FormFieldRebuilder {
         return map;
     }
 
-    public static void renameFields(List<FieldMeta> metas, List<FidMeta> fids, Map<String, String> fidToKeyMap) {
+    public static void renameFields(List<FieldMeta> metas, List<FidMeta> fids, Map<String, String> fidToKeyMap,Map<String, String> fidToFieldName) {
         for (FieldMeta meta : metas) {
             for (FidMeta f : fids) {
                 if (f.page == meta.page && rectsAreClose(f.rect, meta.rect)) {
-                    String matchedKey = fidToKeyMap.getOrDefault(f.fid, "unmapped_" + f.fid);
-                    //System.out.println("🔄 Matched fid: " + f.fid + " to field with rect " + meta.rect);
+                    // For radio buttons, use LLM description if available
+                    if (meta.type == AcroFields.FIELD_TYPE_RADIOBUTTON) {
+                        String desc = fidToFieldName.get(f.fid);
+                        if (desc != null) {
+                            meta.groupName = desc; // Use LLM description as field name
+                        } else {
+                            meta.groupName = "unmapped_" + f.fid;
+                        }
+                    } else {
+                        // For non-radio, use your existing logic
+                        String matchedKey = fidToKeyMap.getOrDefault(f.fid, "unmapped_" + f.fid);
+                        meta.groupName = matchedKey;
+                    }
                     meta.fid = f.fid;
-                    meta.groupName = matchedKey;
                     break;
                 }
             }
             if (meta.groupName == null) {
-                //System.out.println("⚠️  No fid matched for field at page " + meta.page + " rect: " + meta.rect);
                 meta.groupName = "unmapped_unknown";
             }
         }
+
     }
 
     // These would hook into your existing remove/add logic
@@ -194,6 +203,8 @@ public class FormFieldRebuilder {
         List<FieldMeta> checkboxes = new ArrayList<>();
     
         classifyFields(fields, assignedNames, radioGroups, textGroups, checkboxes);
+
+
     
         addRadioGroups(radioGroups, writer, stamper);
         addGroupedTextFields(textGroups, writer, stamper);
@@ -382,26 +393,54 @@ public class FormFieldRebuilder {
         return fieldMetaList;
     }
 
-    public static void rebuildForm(String original, String extractedJson, String mappingJson, String rebuilt) throws Exception {
+
+    public static Map<String, String> loadRadioFidToFieldName(String jsonPath) throws Exception {
+        Map<String, String> fidToFieldName = new HashMap<>();
+        JsonObject obj = JsonParser.parseReader(new FileReader(jsonPath)).getAsJsonObject();
+        for (Map.Entry<String, JsonElement> groupEntry : obj.entrySet()) {
+            JsonObject groupObj = groupEntry.getValue().getAsJsonObject();
+            String fieldName = groupObj.get("description").getAsString(); // Use description as field name
+            JsonArray fids = groupObj.getAsJsonArray("radiobutton_fields");
+            for (JsonElement fidEl : fids) {
+                String fid = fidEl.getAsString();
+                fidToFieldName.put(fid, fieldName);
+            }
+        }
+        return fidToFieldName;
+    }
+
+
+
+    public static void rebuildForm(String original, String extractedJson, String mappingJson, String radioGroupingJson, String rebuilt ) throws Exception {
         String cleaned = original.replace(".pdf", ".cleaned.pdf");
     
         PdfReader reader = new PdfReader(original);
         List<FidMeta> fidMetaList = loadFidMeta(extractedJson, reader);
         Map<String, String> fidToKeyMap = loadFidToKeyMap(mappingJson);
         List<FieldMeta> fields = extractFieldMetadata(original);
+
+        Map<String, String> radioFidToFieldName = loadRadioFidToFieldName(radioGroupingJson);
+            for (FieldMeta meta : fields) {
+                if (meta.type == AcroFields.FIELD_TYPE_RADIOBUTTON) {
+                    String fieldName = radioFidToFieldName.get(meta.fid);
+                    if (fieldName != null) {
+                        meta.groupName = fieldName; 
+                    }
+                }
+            }
+
     
-        renameFields(fields, fidMetaList, fidToKeyMap);
+        renameFields(fields, fidMetaList, fidToKeyMap,radioFidToFieldName );
         removeAllFields(original, cleaned);
         addFields(cleaned, rebuilt, fields);
     }
     
     public static void main(String[] args) throws Exception {
-        if (args.length != 4) {
-            System.err.println("Usage: java -jar FormFieldRebuilder.jar <original.pdf> <extracted.json> <mapping.json> <rebuilt.pdf>");
+        if (args.length != 5) {
+            System.err.println("Usage: java -jar FormFieldRebuilder.jar <original.pdf> <extracted.json> <mapping.json> <radio_button.json> <rebuilt.pdf>");
             System.exit(1);
         }
-    
-        rebuildForm(args[0], args[1], args[2], args[3]);
+        rebuildForm(args[0], args[1], args[2], args[3], args[4]);
     }
 
 }
