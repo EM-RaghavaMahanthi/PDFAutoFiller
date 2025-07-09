@@ -28,8 +28,11 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY src/ ./src/
 COPY config.yaml .
 COPY input_config.yaml.j2 .
-COPY src/java_utils/target/form-field-rebuilder-1.0.0-jar-with-dependencies.jar ./java-util.jar
 
+
+
+COPY src/java_utils/form_field_rebuilder/target/form_field_rebuilder-1.0.0-jar-with-dependencies.jar rebuilder.jar
+COPY src/java_utils/form_field_filler/target/form_field_filler-1.0.0-jar-with-dependencies.jar filler.jar
 
 ENV PYTHONPATH="/app"
 

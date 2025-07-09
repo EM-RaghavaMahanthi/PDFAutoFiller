@@ -8,6 +8,7 @@ from src.utils.job_manager import get_job_dir
 from src.api.stages.extract_stage import run_extract_stage
 from src.api.stages.map_stage import run_map_stage
 from src.api.stages.embed_java_stage import run_embed_java_stage
+from src.api.stages.fill_with_java import fill_with_java
 from src.api.stages.fill_stage import run_fill_stage
 
 import traceback
@@ -41,7 +42,9 @@ async def run_pipeline_async(job_id: str):
 
         # Step 4: Fill
         log_status(job_id, "[✍️] Filling final PDF with values...")
-        run_fill_stage(job_id, pipeline_config)
+        fill_with_java(job_id, pipeline_config)
+
+        #run_fill_stage(job_id, pipeline_config)
 
         log_status(job_id, "[✅] Pipeline completed successfully.")
 

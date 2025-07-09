@@ -12,7 +12,7 @@ def run_embed_java_stage(job_id: str, pipeline_config: dict):
     radio_json = os.path.join(job_dir, "radio_groups.json")
     rebuilt_pdf = os.path.join(job_dir, "embedded_output.pdf")
 
-    jar_path = "src/java_utils/target/form-field-rebuilder-1.0.0-jar-with-dependencies.jar"
+    jar_path = "rebuilder.jar"
 
     # Validate files
     for path in [original_pdf, extracted_json, mapping_json]:
