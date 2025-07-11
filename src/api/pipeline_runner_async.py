@@ -26,28 +26,28 @@ async def run_pipeline_async(job_id: str):
     pipeline_config = render_jinja_config(input_config_path, context)
 
     try:
-        log_status(job_id, "[🚀] Starting pipeline...")
+        await log_status(job_id, "[🚀] Starting pipeline...")
 
         # Step 1: Extract
-        log_status(job_id, "[🔍] Extracting fields from PDF...")
-        run_extract_stage(job_id, pipeline_config)
+        await log_status(job_id, "[🔍] Extracting fields from PDF...")
+        await run_extract_stage(job_id, pipeline_config)
 
         # Step 2: Map (async)
-        log_status(job_id, "[🧠] Running LLM-based mapping...")
+        await log_status(job_id, "[🧠] Running LLM-based mapping...")
         await run_map_stage(job_id, pipeline_config)
 
         # Step 3: Embed Java
-        log_status(job_id, "[📎] Embedding fields into PDF using Java...")
-        run_embed_java_stage(job_id, pipeline_config)
+        await log_status(job_id, "[📎] Embedding fields into PDF using Java...")
+        await run_embed_java_stage(job_id, pipeline_config)
 
         # Step 4: Fill
-        log_status(job_id, "[✍️] Filling final PDF with values...")
-        fill_with_java(job_id, pipeline_config)
+        await log_status(job_id, "[✍️] Filling final PDF with values...")
+        await fill_with_java(job_id, pipeline_config)
 
         #run_fill_stage(job_id, pipeline_config)
 
-        log_status(job_id, "[✅] Pipeline completed successfully.")
+        await log_status(job_id, "[✅] Pipeline completed successfully.")
 
     except Exception as e:
-        log_status(job_id, f"[❌] Pipeline failed: {str(e)}")
+        await log_status(job_id, f"[❌] Pipeline failed: {str(e)}")
         traceback.print_exc()

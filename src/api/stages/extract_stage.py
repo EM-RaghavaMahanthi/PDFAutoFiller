@@ -2,8 +2,8 @@ import os
 from src.extractors import get_extractor_by_name
 from src.utils.stream_status import log_status
 
-def run_extract_stage(job_id: str, pipeline_config: dict):
-    log_status(job_id, "[📄] Starting extraction...")
+async def run_extract_stage(job_id: str, pipeline_config: dict):
+    await log_status(job_id, "[📄] Starting extraction...")
 
     job_dir = f"data/jobs/{job_id}"
     input_pdf_path = os.path.join(job_dir, "input.pdf")
@@ -18,14 +18,14 @@ def run_extract_stage(job_id: str, pipeline_config: dict):
         {}
     )
 
-    log_status(job_id, f"[⚙️] Extractor method: {current_method}")
+    await log_status(job_id, f"[⚙️] Extractor method: {current_method}")
 
     try:
         extractor = get_extractor_by_name(current_method, method_config)
         storage_config = {"name": "local", "output_path": output_json_path}
 
         extracted_data = extractor.extract(input_pdf_path, storage_config)
-        log_status(job_id, "[✅] Extraction completed.")
+        await log_status(job_id, "[✅] Extraction completed.")
     except Exception as e:
-        log_status(job_id, f"[❌] Extraction failed: {str(e)}")
+        await log_status(job_id, f"[❌] Extraction failed: {str(e)}")
         raise

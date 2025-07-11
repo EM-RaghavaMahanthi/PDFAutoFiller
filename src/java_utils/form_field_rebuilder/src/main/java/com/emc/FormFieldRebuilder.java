@@ -272,7 +272,6 @@ public class FormFieldRebuilder {
     
             for (FieldMeta meta : group) {
                 RadioCheckField radio = new RadioCheckField(writer, meta.rect, null, meta.exportValue);
-                System.out.println(meta.exportValue);
                 radio.setCheckType(RadioCheckField.TYPE_SQUARE);
                 PdfFormField radioField = radio.getRadioField();
     

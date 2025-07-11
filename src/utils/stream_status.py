@@ -8,20 +8,26 @@ import aiofiles
 from fastapi.responses import StreamingResponse
 
 
+
 async def stream_status_async(job_id: str):
     status_path = f"data/jobs/{job_id}/status.log"
 
     async def event_stream():
         last_size = 0
-        while True:
-            if os.path.exists(status_path):
-                async with aiofiles.open(status_path, "r") as f:
-                    await f.seek(last_size)
-                    lines = await f.readlines()
-                    last_size = await f.tell()
-                    for line in lines:
-                        yield f"data: {line.strip()}\n\n"
-            await asyncio.sleep(0.5)
+        try:
+            while True:
+                if os.path.exists(status_path):
+                    async with aiofiles.open(status_path, "r") as f:
+                        await f.seek(last_size)
+                        while True:
+                            line = await f.readline()
+                            if not line:
+                                break
+                            last_size = await f.tell()
+                            yield f"data: {line.strip()}\n\n"
+                await asyncio.sleep(0.1)  
+        except asyncio.CancelledError:
+            return
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -52,8 +58,8 @@ def stream_status(job_id):
     return Response(event_stream(), mimetype="text/event-stream")
 
 
-def log_status(job_id, message):
+async def log_status(job_id, message):
     os.makedirs(f"data/jobs/{job_id}", exist_ok=True)
-    with open(f"data/jobs/{job_id}/status.log", "a") as f:
-        f.write(message.strip() + "\n")
-        f.flush() 
+    async with aiofiles.open(f"data/jobs/{job_id}/status.log", "a") as f:
+        await f.write(message.strip() + "\n")
+        await f.flush()

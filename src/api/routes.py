@@ -23,7 +23,7 @@ async def start_pipeline(input_pdf: UploadFile = File(...), input_json: UploadFi
     await save_uploaded_file_async(input_pdf, os.path.join(job_dir, "input.pdf"))
     await save_uploaded_file_async(input_json, os.path.join(job_dir, "input.json"))
 
-    log_status(job_id, "[✓] Uploaded PDF and JSON")
+    await log_status(job_id, "[✓] Uploaded PDF and JSON")
     # Run async pipeline in background
     asyncio.create_task(run_pipeline_async(job_id))
     return {"job_id": job_id}
@@ -47,10 +47,8 @@ async def validate_pdf(job_id: str, validation_pdf: UploadFile = File(...)):
             return JSONResponse(status_code=404, content={"error": f"Invalid job ID: {job_id}"})
 
         validation_path = os.path.join(job_dir, validation_pdf.filename)
-        contents = await validation_pdf.read()
-        with open(validation_path, "wb") as f:
-            f.write(contents)
-
+        await save_uploaded_file_async(validation_pdf, validation_path)
+        
         embed_pdf_path = os.path.join(job_dir, "embedded_output.pdf")
         if not os.path.exists(embed_pdf_path):
             return JSONResponse(status_code=404, content={"error": f"Embedded PDF not found for job ID: {job_id}"})
@@ -66,7 +64,7 @@ async def validate_pdf(job_id: str, validation_pdf: UploadFile = File(...)):
             mapping_path=embed_pdf_path,
             storage_config=storage_config
         )
-        log_status(job_id, f"[✅] Embed validation complete")
+        await log_status(job_id, f"[✅] Embed validation complete")
 
         return {
             "status": "success",

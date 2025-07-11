@@ -37,7 +37,7 @@ export default function App() {
       return [...prev, message];
     });
 
-    if (e.data.includes("Done filling.")) {
+    if (e.data.includes("Pipeline completed successfully")) {
       console.log("[SSE onmessage] Final message detected, closing EventSource.");
       setDone(true);
       eventSource.close();

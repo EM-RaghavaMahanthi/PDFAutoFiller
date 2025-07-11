@@ -30,6 +30,7 @@ __pycache__/
 
 config.yaml
 input_config.yaml.j2
+cmds.txt
 pipeline_config.yaml
 node_modules
 emc_data

@@ -3,7 +3,7 @@ from src.mappers import get_mapper_by_name
 from src.utils.stream_status import log_status
 
 async def run_map_stage(job_id: str, pipeline_config: dict):
-    log_status(job_id, "[🧠] Starting mapping...")
+    await log_status(job_id, "[🧠] Starting mapping...")
 
     job_dir = f"data/jobs/{job_id}"
     extracted_path = os.path.join(job_dir, "extracted.json")
@@ -27,9 +27,9 @@ async def run_map_stage(job_id: str, pipeline_config: dict):
     method_config["chunking"] = strategy_config
 
 
-    log_status(job_id, f"[⚙️] Mapper method: {current_method}")
-    log_status(job_id, f"[⚙️] Chunking strategy: {current_strategy}")
-    log_status(job_id, f"[⚙️] llm used: {method_config["llm"]}")
+    await log_status(job_id, f"[⚙️] Mapper method: {current_method}")
+    await log_status(job_id, f"[⚙️] Chunking strategy: {current_strategy}")
+    await log_status(job_id, f"[⚙️] llm used: {method_config["llm"]}")
 
     try:
         mapper = get_mapper_by_name(current_method, method_config, chunking_config)
@@ -41,7 +41,7 @@ async def run_map_stage(job_id: str, pipeline_config: dict):
             key_variants_path,
             field_name_variants_path
         )
-        log_status(job_id, "[✅] Mapping completed.")
+        await log_status(job_id, "[✅] Mapping completed.")
     except Exception as e:
-        log_status(job_id, f"[❌] Mapping failed: {str(e)}")
+        await log_status(job_id, f"[❌] Mapping failed: {str(e)}")
         raise

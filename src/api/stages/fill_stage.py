@@ -2,8 +2,8 @@ import os
 from src.fillers import get_filler_by_name
 from src.utils.stream_status import log_status
 
-def run_fill_stage(job_id: str, pipeline_config: dict):
-    log_status(job_id, "[✍️] Starting PDF fill stage...")
+async def run_fill_stage(job_id: str, pipeline_config: dict):
+    await log_status(job_id, "[✍️] Starting PDF fill stage...")
 
     job_dir = f"data/jobs/{job_id}"
 
@@ -20,7 +20,7 @@ def run_fill_stage(job_id: str, pipeline_config: dict):
     method_config = next((m for m in method_block.get("methods", []) if m.get("name") == current_method), {})
     method_config["name"] = current_method
 
-    log_status(job_id, f"[⚙️] Filler method selected: {current_method}")
+    await log_status(job_id, f"[⚙️] Filler method selected: {current_method}")
 
     try:
         filler = get_filler_by_name(current_method, method_config)
@@ -34,8 +34,8 @@ def run_fill_stage(job_id: str, pipeline_config: dict):
             storage_config={"output_file": output_pdf_path}
         )
 
-        log_status(job_id, f"[✅] Filling completed. Fields filled: {result.get('filled_fields', '?')}")
-        log_status(job_id, "Done filling.")
+        await log_status(job_id, f"[✅] Filling completed. Fields filled: {result.get('filled_fields', '?')}")
+        await log_status(job_id, "Done filling.")
     except Exception as e:
-        log_status(job_id, f"[❌] Filling failed: {str(e)}")
+        await log_status(job_id, f"[❌] Filling failed: {str(e)}")
         raise

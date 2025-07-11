@@ -1,2 +1,0 @@
-java -jar ../../../src/java_utils/form_field_rebuilder/target/form_field_rebuilder-1.0.0-jar-with-dependencies.jar input.pdf extracted.json mapped.json radio_groups.json rebuilt3.pdf
-
