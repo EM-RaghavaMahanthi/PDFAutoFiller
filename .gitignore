@@ -22,13 +22,26 @@ __pycache__/
 *.swp
 *.swo
 .DS_Store
+.env
+.aws/
 
 # Ignore data folder
 
-main.py
+
 config.yaml
 input_config.yaml.j2
+cmds.txt
 pipeline_config.yaml
+node_modules
+emc_data
 
 data/
 logs/
+
+# Ignore everything in java_utilsAdd commentMore actions
+/src/java_utils/target/
+/src/java_utils/**/target/
+/src/java_utils/**/out/
+/src/java_utils/**/.classpath
+/src/java_utils/**/.project
+/src/java_utils/**/.settings/

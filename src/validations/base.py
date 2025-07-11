@@ -10,8 +10,8 @@ class BaseValidator(ABC):
         Validate mappings using a reference file and write results to output CSV.
 
         Parameters:
-        - validation_path: path to the ground truth JSON
-        - mapping_path: path to the mapped result JSON
+        - validation_path: path to the ground truth (JSON or PDF)
+        - mapping_path: path to the mapped result (JSON or PDF)
         - output_path: CSV file where stats will be saved
         """
         pass

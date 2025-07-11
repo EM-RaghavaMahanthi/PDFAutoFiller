@@ -17,7 +17,7 @@ def fill_pdf(request: FillRequest):
     if not os.path.exists(config_path):
         return {"message": f"Config file not found at {config_path}"}
 
-    pipeline_config = render_jinja_config(config_path, {})    
+    pipeline_config = render_jinja_config(config_path, {})  
 
     # --- Method Section ---
     filler_block = pipeline_config.get("filler", {})
@@ -36,7 +36,8 @@ def fill_pdf(request: FillRequest):
     logger.info(f"Storage type: {current_storage}")
 
     # --- Download files to temp ---
-    temp_pdf_path = download_to_tempfile(storage_config, key_name="pdf_path", suffix=".pdf")
+    temp_pdf_path = download_to_tempfile(storage_config, key_name="input_path", suffix=".pdf")
+    temp_embed_pdf_path = download_to_tempfile(storage_config, key_name="embed_pdf_path", suffix=".pdf")
     temp_extracted_path = download_to_tempfile(storage_config, key_name="extracted_path", suffix=".json")
     temp_mapping_path = download_to_tempfile(storage_config, key_name="mapping_path", suffix=".json")
     temp_input_json_path = download_to_tempfile(storage_config, key_name="input_json_path", suffix=".json")
@@ -44,11 +45,13 @@ def fill_pdf(request: FillRequest):
     try:
         method_config["storage"] = storage_config  
         filler = get_filler_by_name(current_method, method_config)
-        result = filler.fill_pdf(temp_pdf_path, temp_input_json_path, temp_extracted_path, temp_mapping_path, storage_config)
+        result = filler.fill_pdf(temp_pdf_path, temp_embed_pdf_path, temp_input_json_path, temp_extracted_path, temp_mapping_path, storage_config)
+
     finally:
         cleanup_temp_file(temp_pdf_path, delete=False)
         cleanup_temp_file(temp_extracted_path, delete=False)
         cleanup_temp_file(temp_mapping_path, delete=False)
+       
 
     return {
         "message": "PDF Filling Completed",
