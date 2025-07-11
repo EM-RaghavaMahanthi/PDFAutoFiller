@@ -40,42 +40,68 @@ class EmbedValidator(BaseValidator):
     def __init__(self, config: dict):
         super().__init__(config)
 
+
     def _compute_stats(self, ground_truth_map, filled_map):
-        stats = defaultdict(lambda: {"total": 0, "filled": 0, "correctly_filled": 0})
+        stats = defaultdict(lambda: {
+            "total_fields": 0,
+            "total_filled": 0,
+            "total_mapped": 0,
+            "total_unmapped": 0,
+            "correctly_filled": 0
+        })
 
         for key, (gt_field_name, field_type, _) in ground_truth_map.items():
             if "unknown" in gt_field_name.strip().lower():
                 continue
 
-            stats[field_type]["total"] += 1
-            
+            stats[field_type]["total_fields"] += 1
 
             filled_field_name = filled_map.get(key, ("", "", ""))[0].strip()
+            if not filled_field_name:
+                continue
+
+            print(filled_field_name, gt_field_name, field_type)
+
+            stats[field_type]["total_filled"] += 1
+
             mapped_key = filled_field_name.split(".")[-1].strip()
 
-            if mapped_key.lower() != "unmapped":
-                stats[field_type]["filled"] += 1
-
+            if "unmapped" in mapped_key.lower():
+                stats[field_type]["total_unmapped"] += 1
+            else:
+                stats[field_type]["total_mapped"] += 1
                 if mapped_key == gt_field_name.strip():
                     stats[field_type]["correctly_filled"] += 1
 
-        # Aggregate totals
-        combined = {"total": 0, "filled": 0, "correctly_filled": 0}
+        # Compute derived metrics per field type
+        combined = {
+            "total_fields": 0,
+            "total_filled": 0,
+            "total_mapped": 0,
+            "total_unmapped": 0,
+            "correctly_filled": 0
+        }
+
         for field_type, s in stats.items():
-            total, filled, correct = s["total"], s["filled"], s["correctly_filled"]
-            s["fill_rate"] = round((filled / total) * 100, 2) if total else 0
-            s["correct_fill_rate"] = round((correct / total) * 100, 2) if total else 0
+            total = s["total_fields"]
+            filled = s["total_filled"]
+            mapped = s["total_mapped"]
+            correct = s["correctly_filled"]
+
+            s["coverage"] = round((filled / total) * 100, 2) if total else 0
             s["accuracy"] = round((correct / filled) * 100, 2) if filled else 0
+            s["mapping_precision"] = round((correct / mapped) * 100, 2) if mapped else 0
 
-            combined["total"] += total
-            combined["filled"] += filled
-            combined["correctly_filled"] += correct
+            for k in combined:
+                combined[k] += s[k]
 
-        combined["fill_rate"] = round((combined["filled"] / combined["total"]) * 100, 2) if combined["total"] else 0
-        combined["correct_fill_rate"] = round((combined["correctly_filled"] / combined["total"]) * 100, 2) if combined["total"] else 0
-        combined["accuracy"] = round((combined["correctly_filled"] / combined["filled"]) * 100, 2) if combined["filled"] else 0
+        # Compute overall metrics
+        combined["coverage"] = round((combined["total_filled"] / combined["total_fields"]) * 100, 2) if combined["total_fields"] else 0
+        combined["accuracy"] = round((combined["correctly_filled"] / combined["total_filled"]) * 100, 2) if combined["total_filled"] else 0
+        combined["mapping_precision"] = round((combined["correctly_filled"] / combined["total_mapped"]) * 100, 2) if combined["total_mapped"] else 0
 
         return stats, combined
+
 
 
     def validate(self, validation_path: str, mapping_path: str, storage_config: dict):

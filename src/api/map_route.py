@@ -10,6 +10,7 @@ import os
 
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("faiss").setLevel(logging.WARNING)
 router = APIRouter()
 
 @router.post("/map-fields")

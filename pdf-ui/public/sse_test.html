@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SSE Test</title>
+</head>
+<body>
+  <h1>Server-Sent Events Test</h1>
+  <pre id="log"></pre>
+
+  <script>
+    const log = document.getElementById("log");
+    const eventSource = new EventSource("/stream/test");
+
+    eventSource.onmessage = (event) => {
+      console.log("[SSE message]", event.data);
+      const time = new Date().toLocaleTimeString();
+      const line = `[${time}] ${event.data}\n`;
+      log.textContent += line;
+      console.log(line);
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("[SSE error]", err);
+      eventSource.close();
+    };
+  </script>
+</body>
+</html>

@@ -11,6 +11,7 @@ class LLMSelector:
         config = load_config()
         llm_config = config["llm"]
         self.provider = provider or llm_config.get("current_provider")
+        self.max_threads = llm_config.get("max_threads",10)
 
         if self.provider == "gemini":
             gem_cfg = llm_config["gemini"]

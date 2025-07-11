@@ -9,7 +9,15 @@ from src.utils.timing import timing_decorator
 import time
 from src.chunkers import get_chunker
 from src.utils.storage import save_json
-from src.utils.embed_pdf_with_mapped_keys import update_pdf_with_mapped_keys
+from src.groupers.group_by_llm import GroupByLLM
+
+import aiofiles
+
+import asyncio
+from functools import partial
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor()
 
 
 class SemanticMapper:
@@ -17,7 +25,9 @@ class SemanticMapper:
 
         # Initialize LLM
         llm_name = method_config.get("llm", "claude")  
-        self.llm = LLMSelector(provider=llm_name).llm
+        LLM =  LLMSelector(provider=llm_name)
+        self.llm = LLM.llm
+        self.max_threads = LLM.max_threads
 
         self.confidence_threshold = method_config.get("confidence_threshold", "0.7")
 
@@ -399,7 +409,7 @@ Guidelines:
             closing_note
         ])
     
-    def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
+    async def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
         prompt = f"""
     You are a helpful assistant. Given a list of JSON keys from a form or document input, generate a human-readable description for each key that clearly explains what the field represents.
 
@@ -425,9 +435,9 @@ Guidelines:
         parsed = json.loads(cleaned_json)
         return parsed
     
-    def enrich_input_data_llm(self, flat_json: dict, llm) -> dict:
+    async def enrich_input_data_llm(self, flat_json: dict, llm) -> dict:
         keys = list(flat_json.keys())
-        descriptions = self.generate_key_descriptions_bulk(keys, llm)
+        descriptions =await self.generate_key_descriptions_bulk(keys, llm)
 
         enriched = {}
         for key, value in flat_json.items():
@@ -436,20 +446,100 @@ Guidelines:
                 "description": descriptions.get(key, "undefined")
             }
         return enriched
+    
+    async def _process_chunk_async(
+        self,
+        chunk_key: str,
+        chunk_info: dict,
+        input_data: dict,
+        keys_data: dict,
+        input_variants: dict,
+        field_name_variants_all: dict,
+        dbg_f,
+        semaphore
+    ):
+        logger.info(f"[{chunk_key}] Waiting for semaphore... (Available slots: {semaphore._value})")
+
+        async with semaphore:
+            start_time = time.time()
+            logger.info(f"[{chunk_key}] Started async processing (Remaining slots: {semaphore._value})")
+
+            context_text = chunk_info["context"]
+            start_fid = chunk_info["start_fid"]
+            end_fid = chunk_info["end_fid"]
+
+            logger.info(f"[{chunk_key}] start fid: {start_fid} — end fid: {end_fid}")
+
+            result_mapping = {}
+
+            if not context_text.strip() or start_fid < 0:
+                logger.warning(f"[{chunk_key}] Skipping due to empty context or no valid FIDs.")
+                return result_mapping
+
+            # Filter field name variants for this chunk
+            field_name_variants_fids = {}
+            for fid_str, variants in field_name_variants_all.items():
+                try:
+                    fid = int(fid_str)
+                    if start_fid <= fid <= end_fid:
+                        field_name_variants_fids[fid_str] = variants
+                except ValueError:
+                    logger.warning(f"[{chunk_key}] Skipping invalid fid in field variants: {fid_str}")
+
+            # Prepare prompt
+            prompt = self.prepare_prompt(
+                context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids
+            )
+
+            input_tokens = len(self.tokenizer.encode(prompt))
+            logger.info(f"[{chunk_key}] Prompt token count: {input_tokens}")
+
+            try:
+                # Send to LLM
+                response = await asyncio.to_thread(self.llm.complete, prompt)
+                raw_response = response.text if hasattr(response, 'text') else response
+                output_tokens = len(self.tokenizer.encode(raw_response))
+                total_tokens = input_tokens + output_tokens
+                logger.info(f"[{chunk_key}] Output token count: {output_tokens}")
+                logger.info(f"[{chunk_key}] Total tokens: {total_tokens}")
+
+                # Save raw response for debug
+                await dbg_f.write(json.dumps({
+                    "chunk": chunk_key,
+                    "raw_response": raw_response
+                }) + "\n")
+
+                # Parse LLM JSON
+                cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.strip(), flags=re.MULTILINE)
+                parsed = json.loads(cleaned_json)
+
+                for fid, info in parsed.items():
+                    key = info.get("key")
+                    confidence = info.get("con", 0)
+                    value = input_data.get(key) if key in input_data else None
+                    result_mapping[fid] = (key, value, confidence)
+
+            except json.JSONDecodeError:
+                logger.warning(f"[{chunk_key}] Failed to parse LLM JSON. Check debug file.")
+            except Exception as e:
+                logger.error(f"[{chunk_key}] Unexpected error during LLM processing: {e}")
+
+            logger.info(f"[{chunk_key}] Done in {time.time() - start_time:.2f} sec (Slots now: {semaphore._value})")
+
+            return result_mapping
 
 
     @timing_decorator
-    def process_and_save(self, extracted_path, input_json_path,  
-                        original_pdf_path, storage_config: dict, 
-                        input_key_json_variants_path: str = None,
-                        field_names_json_variants_path: str = None,
+    async def process_and_save(self, extracted_path, input_json_path, original_pdf_path, storage_config: dict, 
+                        input_key_json_variants_path: str = None, field_names_json_variants_path: str = None,
                         output_dir="data/temp/"):
 
         mapping_path = storage_config.get("output_path")
+        radio_path = storage_config.get("radio_groups")
         file_stub = os.path.splitext(os.path.basename(mapping_path))[0]
         debug_path = os.path.join(output_dir, f"raw_llm_responses_{file_stub}.jsonl")
 
-        logger.info(f"Starting Field Mapping for extracted file: {extracted_path}")
+        logger.info(f"Starting Field Mapping for: {extracted_path}")
 
         with open(extracted_path, "r", encoding="utf-8") as f:
             extracted_data = json.load(f)
@@ -458,98 +548,61 @@ Guidelines:
 
         input_variants = {}
         if self.include_key_variants and input_key_json_variants_path and os.path.exists(input_key_json_variants_path):
-            logger.info("Including key variants in the prompt.")
             with open(input_key_json_variants_path, "r", encoding="utf-8") as vf:
                 input_variants = json.load(vf)
-            logger.info(f"Loaded input key variants from {input_key_json_variants_path} ({len(input_variants)} entries)")
 
-        field_name_variants = {}
+        field_name_variants_all = {}
         if self.include_field_name_variants and field_names_json_variants_path and os.path.exists(field_names_json_variants_path):
-            logger.info("Including field name variants in the prompt.")
             with open(field_names_json_variants_path, "r", encoding="utf-8") as fvf:
-                field_name_variants = json.load(fvf)
-            logger.info(f"Loaded field name variants from {field_names_json_variants_path} ({len(field_name_variants)} entries)")
+                field_name_variants_all = json.load(fvf)
 
-        keys_data= self.prepare_updated_input_data(input_data)
-        if self.include_description==1:
+        keys_data = self.prepare_updated_input_data(input_data)
+        if self.include_description == 1:
             logger.info("Preparing & Including key descriptions in the prompt.")
-            enriched_data = self.enrich_input_data_llm(input_data, llm=self.llm)
+            enriched_data = await self.enrich_input_data_llm(input_data, llm=self.llm)
             keys_data = self.prepare_updated_input_data_with_description(enriched_data)
+
         context_dict, _ = self.chunker.generate_context_and_stats(extracted_data)
-        final_output = {}
         final_flat_mapping = {}
 
-        with open(debug_path, "w", encoding="utf-8") as dbg_f:
-            for i, (chunk_key, chunk_info) in enumerate(context_dict.items()):
-                logger.info(f"[Chunk {i+1}] Processing {chunk_key}")
+        groupby_kwargs = {
+            "llm": self.llm,
+            "field_type": "RADIOBUTTON",
+            "threshold": 2,
+            "keys_data": keys_data,  # Pass your semantic keys for matching
+        }
 
-                context_text = chunk_info["context"]
-                start_fid = chunk_info["start_fid"]
-                end_fid = chunk_info["end_fid"]
+        grouper = GroupByLLM(extracted_data, **groupby_kwargs)
+        radio_groups = grouper.group()
+        with open(radio_path, "w", encoding="utf-8") as f:
+            json.dump(radio_groups, f, indent=4, ensure_ascii=False)
 
-                logger.info(f"start fid: {start_fid}\tend fid: {end_fid}")
+        semaphore = asyncio.Semaphore(self.max_threads)
 
-                if not context_text.strip() or start_fid<0:
-                    logger.warning(f"{chunk_key}: Skipping empty context or nor fields")
-                    continue
+        logger.info(f"We are running max threads of {self.max_threads}")
 
-                chunk_start = time.time()
-                field_name_variants_fids = {}
-                if self.include_field_name_variants and field_name_variants:
-                    for fid_str, variants in field_name_variants.items():
-                        try:
-                            fid = int(fid_str)
-                            if start_fid <= fid <= end_fid:
-                                field_name_variants_fids[str(fid)] = variants
-                        except ValueError:
-                            logger.warning(f"Invalid fid in field_name_variants: {fid_str}")
+        async def run_all_chunks():
+            tasks = []
+            async with aiofiles.open(debug_path, "w", encoding="utf-8") as dbg_f:
+                for i, (chunk_key, chunk_info) in enumerate(context_dict.items()):
+                    task = self._process_chunk_async(
+                        chunk_key, chunk_info,
+                        input_data, keys_data,
+                        input_variants,
+                        field_name_variants_all,
+                        dbg_f,
+                        semaphore
+                    )
+                    tasks.append(task)
+                results = await asyncio.gather(*tasks)
+                for chunk_result in results:
+                    final_flat_mapping.update(chunk_result)
 
-                prompt = self.prepare_prompt(context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids)
-                logger.info(prompt)
-                input_tokens = len(self.tokenizer.encode(prompt))
-
-                response = self.llm.complete(prompt)
-                raw_response = response.text if hasattr(response, 'text') else response
-                output_tokens = len(self.tokenizer.encode(raw_response))
-
-                logger.info(f"{chunk_key}: Input Tokens = {input_tokens}, Output Tokens = {output_tokens}")
-
-                dbg_f.write(json.dumps({
-                    "chunk": chunk_key,
-                    "raw_response": raw_response
-                }) + "\n")
-
-                try:
-                    cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.strip(), flags=re.MULTILINE)
-                    parsed = json.loads(cleaned_json)
-
-                    for fid, info in parsed.items():
-                        key = info.get("key")
-                        confidence = info.get("con", 0)
-                        value = input_data.get(key) if key in input_data else None
-                        final_flat_mapping[fid] = (key, value, confidence)
-
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse LLM JSON in chunk {chunk_key}. Check debug file.")
-
-                logger.info(f"{chunk_key}: Chunk processed in {(time.time() - chunk_start):.2f} seconds.")
+        await run_all_chunks()
 
         save_json(final_flat_mapping, storage_config)
 
-        dirname = os.path.dirname(original_pdf_path)
-        basename = os.path.basename(original_pdf_path)
-        embed_pdf_path = os.path.join(dirname, f"embedded_{basename}")
-
-        update_pdf_with_mapped_keys(
-            pdf_path=original_pdf_path,
-            final_flat_mapping=final_flat_mapping,
-            extracted_data=extracted_data,
-            embed_pdf_path=embed_pdf_path,
-            storage_config=storage_config,
-            confidence_threshold=self.confidence_threshold 
-         )
-
+        logger.info(f"Saved field mappings to: {mapping_path}")
         logger.info(f"Saved raw LLM responses to: {debug_path}")
-        logger.info(f"Saved cleaned (deduplicated) field mappings to: {mapping_path}")
-
         return mapping_path
+
