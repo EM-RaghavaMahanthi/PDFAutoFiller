@@ -37,6 +37,20 @@ public class FormFieldRebuilder {
         }
     }
 
+    public static class RadioButton {
+        private final String fieldName;
+        private final String exportValue;
+
+        public RadioButton(String fieldName, String exportValue) {
+            this.fieldName = fieldName;
+            this.exportValue = exportValue;
+        }
+
+        public String getFieldName() { return fieldName; }
+        public String getExportValue() { return exportValue; }
+    }
+
+
     public static class FidMeta {
         public String fid;
         public int page;
@@ -112,17 +126,23 @@ public class FormFieldRebuilder {
         return map;
     }
 
-    public static void renameFields(List<FieldMeta> metas, List<FidMeta> fids, Map<String, String> fidToKeyMap,Map<String, String> fidToFieldName) {
+    public static void renameFields(
+        List<FieldMeta> metas,
+        List<FidMeta> fids,
+        Map<String, String> fidToKeyMap,
+        Map<String, RadioButton> fidToRadioButton
+    ) {
         for (FieldMeta meta : metas) {
             for (FidMeta f : fids) {
                 if (f.page == meta.page && rectsAreClose(f.rect, meta.rect)) {
-                    // For radio buttons, use LLM description if available
                     if (meta.type == AcroFields.FIELD_TYPE_RADIOBUTTON) {
-                        String desc = fidToFieldName.get(f.fid);
-                        if (desc != null) {
-                            meta.groupName = desc; // Use LLM description as field name
+                        RadioButton rb = fidToRadioButton.get(f.fid);
+                        if (rb != null) {
+                            meta.groupName = rb.getFieldName();    
+                            meta.exportValue = rb.getExportValue(); 
                         } else {
                             meta.groupName = "unmapped_" + f.fid;
+                            meta.exportValue = ""; 
                         }
                     } else {
                         // For non-radio, use your existing logic
@@ -137,7 +157,6 @@ public class FormFieldRebuilder {
                 meta.groupName = "unmapped_unknown";
             }
         }
-
     }
 
     // These would hook into your existing remove/add logic
@@ -253,22 +272,23 @@ public class FormFieldRebuilder {
     
             for (FieldMeta meta : group) {
                 RadioCheckField radio = new RadioCheckField(writer, meta.rect, null, meta.exportValue);
+                System.out.println(meta.exportValue);
                 radio.setCheckType(RadioCheckField.TYPE_SQUARE);
                 PdfFormField radioField = radio.getRadioField();
     
                 PdfDictionary apDict = new PdfDictionary();
                 PdfDictionary ap = new PdfDictionary();
-    
+
                 PdfAppearance off = PdfAppearance.createAppearance(writer, meta.rect.getWidth(), meta.rect.getHeight());
                 ap.put(PdfName.Off, off.getIndirectReference());
-    
-                for (String option : meta.exportOptions) {
-                    PdfAppearance on = PdfAppearance.createAppearance(writer, meta.rect.getWidth(), meta.rect.getHeight());
-                    on.setGrayFill(0.0f);
-                    on.rectangle(2, 2, meta.rect.getWidth() - 4, meta.rect.getHeight() - 4);
-                    on.fill();
-                    ap.put(new PdfName(option), on.getIndirectReference());
-                }
+
+                // Only add the appearance for the current export value
+                PdfAppearance on = PdfAppearance.createAppearance(writer, meta.rect.getWidth(), meta.rect.getHeight());
+                on.setGrayFill(0.0f);
+                on.rectangle(2, 2, meta.rect.getWidth() - 4, meta.rect.getHeight() - 4);
+                on.fill();
+                ap.put(new PdfName(meta.exportValue), on.getIndirectReference());
+
     
                 apDict.put(PdfName.N, ap);
                 radioField.put(PdfName.AP, apDict);
@@ -409,6 +429,22 @@ public class FormFieldRebuilder {
         return fidToFieldName;
     }
 
+    public static Map<String, RadioButton> loadRadioFidToRadioButton(String jsonPath) throws Exception {
+        Map<String, RadioButton> fidToRadioButton = new HashMap<>();
+        JsonObject obj = JsonParser.parseReader(new FileReader(jsonPath)).getAsJsonObject();
+        for (Map.Entry<String, JsonElement> groupEntry : obj.entrySet()) {
+            JsonObject groupObj = groupEntry.getValue().getAsJsonObject();
+            String fieldName = groupObj.get("description").getAsString();
+            JsonArray fids = groupObj.getAsJsonArray("radiobutton_fields");
+            JsonArray exportValues = groupObj.getAsJsonArray("export_values");
+            for (int i = 0; i < fids.size(); i++) {
+                String fid = fids.get(i).getAsString();
+                String exportValue = (exportValues != null && exportValues.size() > i) ? exportValues.get(i).getAsString() : "";
+                fidToRadioButton.put(fid, new RadioButton(fieldName, exportValue));
+            }
+        }
+        return fidToRadioButton;
+    }
 
 
     public static void rebuildForm(String original, String extractedJson, String mappingJson, String radioGroupingJson, String rebuilt ) throws Exception {
@@ -419,18 +455,19 @@ public class FormFieldRebuilder {
         Map<String, String> fidToKeyMap = loadFidToKeyMap(mappingJson);
         List<FieldMeta> fields = extractFieldMetadata(original);
 
-        Map<String, String> radioFidToFieldName = loadRadioFidToFieldName(radioGroupingJson);
-            for (FieldMeta meta : fields) {
-                if (meta.type == AcroFields.FIELD_TYPE_RADIOBUTTON) {
-                    String fieldName = radioFidToFieldName.get(meta.fid);
-                    if (fieldName != null) {
-                        meta.groupName = fieldName; 
-                    }
+        Map<String, RadioButton> radioFidToRadioButton = loadRadioFidToRadioButton(radioGroupingJson);
+        for (FieldMeta meta : fields) {
+            if (meta.type == AcroFields.FIELD_TYPE_RADIOBUTTON) {
+                RadioButton rb = radioFidToRadioButton.get(meta.fid);
+                if (rb != null) {
+                    meta.groupName = rb.getFieldName();
+                    meta.exportValue = rb.getExportValue();
                 }
             }
+        }
 
     
-        renameFields(fields, fidMetaList, fidToKeyMap,radioFidToFieldName );
+        renameFields(fields, fidMetaList, fidToKeyMap,radioFidToRadioButton);
         removeAllFields(original, cleaned);
         addFields(cleaned, rebuilt, fields);
     }

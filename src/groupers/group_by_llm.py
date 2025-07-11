@@ -63,14 +63,17 @@ class GroupByLLM(BaseGrouper):
     3. Otherwise, assign a short and meaningful description to each group, it should be crisp and sharp.
     4. Only use the numeric ID (e.g., 29, 30) from each [{field_type_upper}_FIELD:X] token.
     5. Return a clean JSON object with the following format exactly: We don't need any explanation, headers or any others things in reponse. only json output like below.
+    6. Get correct export value or subname if is it radio button for that corresponding field id else return empty list
 
     {{
     "group_1": {{
         "{output_key}": [29, 30, 31],
+        "export_values" : [Mr, Mrs, Dr],
         "description": "matched_key_or_generated_description"
     }},
     "group_2": {{
         "{output_key}": [45, 46],
+        "export_values": [yes, no],
         "description": "matched_key_or_generated_description"
     }}
     }}
