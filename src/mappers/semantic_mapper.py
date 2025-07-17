@@ -11,6 +11,10 @@ from src.chunkers import get_chunker
 from src.utils.storage import save_json
 from src.groupers.group_by_llm import GroupByLLM
 
+from src.llm.llm_client_baml import make_llm_registry
+
+from src.utils.formattors import transform_group_fields_output
+
 import aiofiles
 
 import asyncio
@@ -47,18 +51,57 @@ class SemanticMapper:
         )
         strategy_config["name"] = strategy  
         self.chunker = get_chunker(strategy, self.tokenizer, **strategy_config)
+
+        provider = os.getenv("LLM_PROVIDER", "openai")
+        model = os.getenv("LLM_MODEL")
+        region = os.getenv("LLM_AWS_REGION")
+        profile = os.getenv("LLM_AWS_PROFILE")
+
+        temperature = method_config.get("temperature", None)
+        max_tokens = method_config.get("max_tokens", None)
+        api_key_env = "OPENAI_API_KEY" if provider == "openai" else "ANOTHER_KEY_ENV_VAR"
+
+        # Build the ClientRegistry once with your utility
+        self.client_registry = make_llm_registry(
+            provider=provider,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            region=region,
+            profile=profile,
+            api_key_env=api_key_env,
+            set_primary=True
+        )
+
+        from baml_client.async_client import b as b_async
+        self.baml_client = b_async
         
     def prepare_updated_input_data(self, input_data):
         """Only keep list of keys, ignore values."""
         return list(input_data.keys())
     
-    def prepare_updated_input_data_with_description(self, input_data) -> dict:
-        return {
-            key: [info["description"]] 
-            for key, info in input_data.items()
-            if "description" in info
-        }
-    
+    def prepare_updated_input_data_with_description(self, input_data) -> list:
+        """
+        Convert input_data dict into a list of KeyDescription dicts:
+        [
+        {"key": key1, "descriptions": [desc1, desc2, ...]},
+        {"key": key2, "descriptions": [desc1, ...]},
+        ...
+        ]
+        """
+        key_descriptions = []
+        for key, info in input_data.items():
+            if "description" in info:
+                desc_list = info["description"]
+                # Ensure it's always a list (convert string to list if needed)
+                if isinstance(desc_list, str):
+                    desc_list = [desc_list]
+                key_descriptions.append({
+                    "key": key,
+                    "descriptions": desc_list
+                })
+        return key_descriptions
+
     def flatten_enriched_data(self, enriched: dict) -> dict:
         return {
             key: info["value"]
@@ -410,31 +453,24 @@ Guidelines:
         ])
     
     async def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
-        prompt = f"""
-    You are a helpful assistant. Given a list of JSON keys from a form or document input, generate a human-readable description for each key that clearly explains what the field represents.
+        if not keys:
+            return {}
 
-    If the meaning of any key is unclear or ambiguous, return "undefined" for that key.
+        batch_size = max(1, len(keys) // self.max_threads)
+        batches = [keys[i:i + batch_size] for i in range(0, len(keys), batch_size)]
 
-    Strictly return the output as a valid JSON object in the format:
-    {{ "key": "description", ... }}
+        async def call_batch(batch_keys):
+            result = await self.baml_client.GenerateKeyDescriptions(keys=batch_keys)
+            return {item.key: item.description for item in result.descriptions}
 
-    Try adding better description not just paraphrasing, whos or who are important
+        tasks = [call_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
 
-    Also retain the numbering in ther say BOwnerCorporationFulllegalname4_ID, it is fourth BOwner...
+        merged = {}
+        for d in results:
+            merged.update(d)
 
-    Also whenever you find Inception date, tell that it is not data of birth very clearly. 
-
-    Do not include any extra commentary, markdown, or explanation — only valid JSON.
-
-    Keys: {keys}
-
-    Output:
-    """
-        raw_response = llm.complete(prompt)
-        cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.text.strip(), flags=re.MULTILINE)
-        parsed = json.loads(cleaned_json)
-        return parsed
-    
+        return merged
     async def enrich_input_data_llm(self, flat_json: dict, llm) -> dict:
         keys = list(flat_json.keys())
         descriptions =await self.generate_key_descriptions_bulk(keys, llm)
@@ -445,8 +481,7 @@ Guidelines:
                 "value": value,
                 "description": descriptions.get(key, "undefined")
             }
-        return enriched
-    
+        return enriched    
     async def _process_chunk_async(
         self,
         chunk_key: str,
@@ -464,9 +499,9 @@ Guidelines:
             start_time = time.time()
             logger.info(f"[{chunk_key}] Started async processing (Remaining slots: {semaphore._value})")
 
-            context_text = chunk_info["context"]
-            start_fid = chunk_info["start_fid"]
-            end_fid = chunk_info["end_fid"]
+            context_text = chunk_info.get("context", "")
+            start_fid = chunk_info.get("start_fid", -1)
+            end_fid = chunk_info.get("end_fid", -1)
 
             logger.info(f"[{chunk_key}] start fid: {start_fid} — end fid: {end_fid}")
 
@@ -476,53 +511,67 @@ Guidelines:
                 logger.warning(f"[{chunk_key}] Skipping due to empty context or no valid FIDs.")
                 return result_mapping
 
-            # Filter field name variants for this chunk
+            # Filter field name variants relevant to this chunk
             field_name_variants_fids = {}
             for fid_str, variants in field_name_variants_all.items():
                 try:
-                    fid = int(fid_str)
-                    if start_fid <= fid <= end_fid:
+                    fid_int = int(fid_str)
+                    if start_fid <= fid_int <= end_fid:
                         field_name_variants_fids[fid_str] = variants
                 except ValueError:
                     logger.warning(f"[{chunk_key}] Skipping invalid fid in field variants: {fid_str}")
 
-            # Prepare prompt
-            prompt = self.prepare_prompt(
-                context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids
-            )
+            # Prepare key variants in list-of-dicts form for BAML
+            key_variants_list = []
+            if self.include_key_variants and input_variants:
+                key_variants_list = [{"key": k, "variants": v} for k, v in input_variants.items()]
 
-            input_tokens = len(self.tokenizer.encode(prompt))
-            logger.info(f"[{chunk_key}] Prompt token count: {input_tokens}")
+            # Prepare field name variants in list-of-dicts form for BAML
+            field_name_variants_list = []
+            if self.include_field_name_variants and field_name_variants_fids:
+                field_name_variants_list = [{"fid": fid, "variants": variants} for fid, variants in field_name_variants_fids.items()]
 
             try:
-                # Send to LLM
-                response = await asyncio.to_thread(self.llm.complete, prompt)
-                raw_response = response.text if hasattr(response, 'text') else response
-                output_tokens = len(self.tokenizer.encode(raw_response))
-                total_tokens = input_tokens + output_tokens
-                logger.info(f"[{chunk_key}] Output token count: {output_tokens}")
-                logger.info(f"[{chunk_key}] Total tokens: {total_tokens}")
+                # Count tokens in prompt, if you want (optional)
+                prompt_str = self.prepare_prompt(
+                    context_text, keys_data, start_fid, end_fid, input_variants, field_name_variants_fids
+                )
+                input_tokens = len(self.tokenizer.encode(prompt_str))
+                logger.info(f"[{chunk_key}] Prompt token count: {input_tokens}")
 
-                # Save raw response for debug
+                # Call the BAML MapFieldsToKeys function passing client registry
+                parsed_list = await self.baml_client.MapFieldsToKeys(
+                    context_text=context_text,
+                    input_keys=keys_data,
+                    fid_start=start_fid,
+                    fid_end=end_fid,
+                    include_description=self.include_description,
+                    key_variants={"items": key_variants_list} if key_variants_list else {"items": []},
+                    field_name_variants={"items": field_name_variants_list} if field_name_variants_list else {"items": []},
+                    baml_options={"client_registry": self.client_registry}
+                )
+
+                # If BAML client returns a pydantic model or list of dataclasses, no json parsing needed
+                output_tokens = sum(len(self.tokenizer.encode(f"{item.fid}{item.key}{item.con}")) for item in parsed_list)
+                total_tokens = input_tokens + output_tokens
+                logger.info(f"[{chunk_key}] Output token count estimate: {output_tokens}")
+                logger.info(f"[{chunk_key}] Total tokens estimate: {total_tokens}")
+
                 await dbg_f.write(json.dumps({
                     "chunk": chunk_key,
-                    "raw_response": raw_response
+                    "raw_response": [item.dict() for item in parsed_list]  # serialize for debug
                 }) + "\n")
 
-                # Parse LLM JSON
-                cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.strip(), flags=re.MULTILINE)
-                parsed = json.loads(cleaned_json)
-
-                for fid, info in parsed.items():
-                    key = info.get("key")
-                    confidence = info.get("con", 0)
+                # Build your result mapping (fid -> (key, value, confidence))
+                for item in parsed_list:
+                    fid = item.fid
+                    key = item.key
+                    confidence = item.con if item.con is not None else 0
                     value = input_data.get(key) if key in input_data else None
                     result_mapping[fid] = (key, value, confidence)
 
-            except json.JSONDecodeError:
-                logger.warning(f"[{chunk_key}] Failed to parse LLM JSON. Check debug file.")
             except Exception as e:
-                logger.error(f"[{chunk_key}] Unexpected error during LLM processing: {e}")
+                logger.error(f"[{chunk_key}] Exception while calling MapFieldsToKeys: {e}")
 
             logger.info(f"[{chunk_key}] Done in {time.time() - start_time:.2f} sec (Slots now: {semaphore._value})")
 
@@ -573,7 +622,8 @@ Guidelines:
         }
 
         grouper = GroupByLLM(extracted_data, **groupby_kwargs)
-        radio_groups = grouper.group()
+        radio_groups = await grouper.group()
+        radio_groups=transform_group_fields_output(radio_groups)
         with open(radio_path, "w", encoding="utf-8") as f:
             json.dump(radio_groups, f, indent=4, ensure_ascii=False)
 

@@ -26,6 +26,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy source code and config files
 COPY src/ ./src/
+COPY baml_client ./baml_client
 COPY config.yaml .
 COPY input_config.yaml.j2 .
 

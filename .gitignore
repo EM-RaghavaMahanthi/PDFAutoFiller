@@ -45,3 +45,6 @@ logs/
 /src/java_utils/**/.classpath
 /src/java_utils/**/.project
 /src/java_utils/**/.settings/
+
+baml_client
+baml_src/resume.baml
