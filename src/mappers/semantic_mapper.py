@@ -409,7 +409,12 @@ Guidelines:
             closing_note
         ])
     
-    async def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
+    def chunk_keys(self, keys, n_chunks):
+        chunk_size = max(1, len(keys) // n_chunks)
+        for i in range(0, len(keys), chunk_size):
+            yield keys[i:i + chunk_size]
+    
+    def generate_key_descriptions_bulk(self, keys: list, llm) -> dict:
         prompt = f"""
     You are a helpful assistant. Given a list of JSON keys from a form or document input, generate a human-readable description for each key that clearly explains what the field represents.
 
@@ -431,21 +436,47 @@ Guidelines:
     Output:
     """
         raw_response = llm.complete(prompt)
-        cleaned_json = re.sub(r"^```json\n?|```$", "", raw_response.text.strip(), flags=re.MULTILINE)
+        if hasattr(raw_response, "text"):
+            text = raw_response.text
+        else:
+            text = raw_response
+        cleaned_json = re.sub(r"^```json\n?|```$", "", text.strip(), flags=re.MULTILINE)
         parsed = json.loads(cleaned_json)
         return parsed
-    
+
+
     async def enrich_input_data_llm(self, flat_json: dict, llm) -> dict:
         keys = list(flat_json.keys())
-        descriptions =await self.generate_key_descriptions_bulk(keys, llm)
+        num_threads = min(self.max_threads, len(keys)) if keys else 1
+        key_batches = list(self.chunk_keys(keys, num_threads))
+        semaphore = asyncio.Semaphore(self.max_threads)
 
-        enriched = {}
-        for key, value in flat_json.items():
-            enriched[key] = {
-                "value": value,
-                "description": descriptions.get(key, "undefined")
-            }
+        logger.info(f"We are running max threads  on input batches on {num_threads}")
+        
+        async def process_batch(batch, idx):
+            async with semaphore:
+                loop = asyncio.get_running_loop()
+                descriptions = await loop.run_in_executor(None, self.generate_key_descriptions_bulk, batch, llm)
+                return descriptions
+
+        # Launch all batch tasks (they will gate on the semaphore)
+        tasks = [
+            asyncio.create_task(process_batch(batch, idx))
+            for idx, batch in enumerate(key_batches)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Merge output
+        descriptions = {}
+        for batch_desc in results:
+            descriptions.update(batch_desc)
+
+        enriched = {
+            key: {"value": value, "description": descriptions.get(key, "undefined")}
+            for key, value in flat_json.items()
+        }
         return enriched
+
     
     async def _process_chunk_async(
         self,
