@@ -48,3 +48,5 @@ logs/
 
 baml_client
 baml_src/resume.baml
+
+*.txt

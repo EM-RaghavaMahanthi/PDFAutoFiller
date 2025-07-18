@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 from baml_py import ClientRegistry
+from src.utils.logger import logger
 
 def make_llm_registry(
     provider: str,
@@ -70,6 +71,7 @@ def make_llm_registry(
         raise ValueError(f"Unsupported provider: {provider}")
 
     if set_primary and client_name:
+        logger.info(f"We are using the client [{client_name}] from registry")
         cr.set_primary(client_name)
 
     return cr

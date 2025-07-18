@@ -34,8 +34,9 @@ function GroupFieldsFromText(
     You are given lines extracted from a PDF form. Some lines contain tokens like [{{ field_type_upper  }}_FIELD:X], which represent individual {{field_type_lower }} fields.
 
     {% if keys_data %}
-    You are also provided with a dictionary of semantic keys and their list of descriptions:
+    You are also provided with a dictionary of semantic keys and their list of descriptions:{
     {{ keys_data }}
+    }
 
     - For each group, if the group's context or label closely matches a description from this dictionary, use the corresponding key (the dictionary key, not the description) as the group’s description.
     - If no match is found, generate a new, crisp, context-driven description for the group as before.
